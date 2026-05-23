@@ -25,4 +25,4 @@ trajectory_controller:
     max_angular_speed: 1.0
     distance_threshold: 0.15
     angle_threshold: 0.15
-    loop_trajectory: true
+    loop_trajectory: false

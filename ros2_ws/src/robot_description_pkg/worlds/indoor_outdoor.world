@@ -88,7 +88,7 @@
       <latitude_deg>45.0500</latitude_deg>
       <longitude_deg>7.6600</longitude_deg>
       <elevation>0.0</elevation>
-      <heading_deg>0.0</heading_deg>
+      <heading_deg>180.0</heading_deg>
     </spherical_coordinates>
     <model name='floor_wood'>
       <static>1</static>
