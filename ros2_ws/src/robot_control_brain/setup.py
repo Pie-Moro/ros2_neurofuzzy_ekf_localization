@@ -24,7 +24,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'trajectory_nn_node = robot_control_brain.trajectory_nn_node:main',
+            'trajectory_nn_node = robot_control_brain.ANN:main',
         ],
     },
 )
