@@ -13,7 +13,7 @@ def generate_launch_description():
     pkg_name = 'robot_description_pkg'
     pkg_dir = get_package_share_directory(pkg_name)
 
-    # 1. Gazebo with custom indoor/outdoor world
+    # 1. Launch Gazebo with the custom indoor/outdoor world
     world_file = os.path.join(pkg_dir, 'worlds', 'indoor_outdoor.world')
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -23,7 +23,7 @@ def generate_launch_description():
         launch_arguments={'world': world_file}.items()
     )
 
-    # 2. Resolve xacro to URDF at launch time
+    # 2. Resolve the xacro to a URDF string at launch time
     robot_description_content = Command([
         PathJoinSubstitution([FindExecutable(name='xacro')]),
         ' ',
@@ -31,9 +31,10 @@ def generate_launch_description():
                               'urdf', 'tb3_custom.urdf.xacro'])
     ])
 
+    # Force the parameter to be treated as a string (not a substitution)
     robot_description = ParameterValue(robot_description_content, value_type=str)
 
-    # 3. Publish TF tree
+    # 3. Publish the TF tree
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -44,9 +45,15 @@ def generate_launch_description():
         }]
     )
 
-    # 4. Spawn outside the building (north of the wall envelope).
-    #    Building walls end at Y = 4.55 (world frame). Y = 6.5 is clear outdoors.
-    #    Low z = 0.05 avoids a drop-induced angular impulse.
+    # 4. Spawn the robot in Gazebo.
+    #
+    # World wall envelope (world frame): X ∈ [-10.86, 11.20], Y ∈ [-4.15, 4.55].
+    # Spawning at (5.0, 6.5) places the robot ~1.95 m north of the building —
+    # clearly OUTDOORS, on open grass.
+    #
+    # z = 0.05 keeps the wheels just above the ground so they snap to contact
+    # without a big drop. Dropping the robot from 0.3 m (previous value)
+    # creates an initial angular impulse that can look like drift.
     spawn_entity = Node(
         package='gazebo_ros',
         executable='spawn_entity.py',

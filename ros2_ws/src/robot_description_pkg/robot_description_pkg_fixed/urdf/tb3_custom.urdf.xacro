@@ -1,15 +1,15 @@
 <?xml version="1.0" ?>
 <robot name="turtlebot3_burger" xmlns:xacro="http://ros.org/wiki/xacro">
 
-  <!--
-    Customised TurtleBot3 Burger URDF (Xacro)
-    Namespace argument supports multi-robot spawning.
-    Usage:  xacro tb3_custom.urdf.xacro namespace:=robot1/
-  -->
+  <!-- ───────────────────────────────────────────────────
+       Namespace argument — supports multi-robot spawning.
+       Usage:  xacro tb3_custom.urdf.xacro namespace:=robot1/
+       Default is empty string (single-robot use).
+  ─────────────────────────────────────────────────────── -->
   <xacro:arg name="namespace" default=""/>
   <xacro:property name="namespace" value="$(arg namespace)"/>
 
-  <!-- Materials -->
+  <!-- ── Materials ──────────────────────────────────── -->
   <material name="black">      <color rgba="0.0 0.0 0.0 1.0"/></material>
   <material name="dark">       <color rgba="0.3 0.3 0.3 1.0"/></material>
   <material name="light_black"><color rgba="0.4 0.4 0.4 1.0"/></material>
@@ -21,7 +21,7 @@
   <material name="red">        <color rgba="0.8 0.0 0.0 1.0"/></material>
   <material name="white">      <color rgba="1.0 1.0 1.0 1.0"/></material>
 
-  <!-- Base footprint -->
+  <!-- ── Base footprint (virtual floor-level origin) ── -->
   <link name="${namespace}base_footprint"/>
 
   <joint name="${namespace}base_joint" type="fixed">
@@ -30,12 +30,13 @@
     <origin xyz="0.0 0.0 0.010" rpy="0 0 0"/>
   </joint>
 
-  <!-- Base link -->
+  <!-- ── Base link (chassis) ──────────────────────── -->
   <link name="${namespace}base_link">
     <visual>
       <origin xyz="-0.032 0 0.0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="file://$(find robot_description_pkg)/meshes/bases/burger_base.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="file://$(find robot_description_pkg)/meshes/bases/burger_base.stl"
+              scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="light_black"/>
     </visual>
@@ -51,7 +52,7 @@
     </inertial>
   </link>
 
-  <!-- Left wheel -->
+  <!-- ── Left wheel ───────────────────────────────── -->
   <joint name="${namespace}wheel_left_joint" type="continuous">
     <parent link="${namespace}base_link"/>
     <child  link="${namespace}wheel_left_link"/>
@@ -63,7 +64,8 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.57 0 0"/>
       <geometry>
-        <mesh filename="file://$(find robot_description_pkg)/meshes/wheels/left_tire.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="file://$(find robot_description_pkg)/meshes/wheels/left_tire.stl"
+              scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="dark"/>
     </visual>
@@ -79,7 +81,7 @@
     </inertial>
   </link>
 
-  <!-- Right wheel -->
+  <!-- ── Right wheel ──────────────────────────────── -->
   <joint name="${namespace}wheel_right_joint" type="continuous">
     <parent link="${namespace}base_link"/>
     <child  link="${namespace}wheel_right_link"/>
@@ -91,7 +93,8 @@
     <visual>
       <origin xyz="0 0 0" rpy="1.57 0 0"/>
       <geometry>
-        <mesh filename="file://$(find robot_description_pkg)/meshes/wheels/right_tire.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="file://$(find robot_description_pkg)/meshes/wheels/right_tire.stl"
+              scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="dark"/>
     </visual>
@@ -107,7 +110,7 @@
     </inertial>
   </link>
 
-  <!-- Rear caster (fixed skid plate) -->
+  <!-- ── Rear caster ──────────────────────────────── -->
   <joint name="${namespace}caster_back_joint" type="fixed">
     <parent link="${namespace}base_link"/>
     <child  link="${namespace}caster_back_link"/>
@@ -127,7 +130,7 @@
     </inertial>
   </link>
 
-  <!-- IMU -->
+  <!-- ── IMU ──────────────────────────────────────── -->
   <joint name="${namespace}imu_joint" type="fixed">
     <parent link="${namespace}base_link"/>
     <child  link="${namespace}imu_link"/>
@@ -136,7 +139,7 @@
 
   <link name="${namespace}imu_link"/>
 
-  <!-- LiDAR mount (visual only - no sensor plugin, project does not use LiDAR) -->
+  <!-- ── LiDAR (LDS-01) ───────────────────────────── -->
   <joint name="${namespace}scan_joint" type="fixed">
     <parent link="${namespace}base_link"/>
     <child  link="${namespace}base_scan"/>
@@ -147,7 +150,8 @@
     <visual>
       <origin xyz="0 0 0.0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="file://$(find robot_description_pkg)/meshes/sensors/lds.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="file://$(find robot_description_pkg)/meshes/sensors/lds.stl"
+              scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="dark"/>
     </visual>
@@ -163,7 +167,11 @@
     </inertial>
   </link>
 
-  <!-- GPS (now properly namespaced) -->
+  <!-- ── GPS ─────────────────────────────────────────
+       FIX: ${namespace} prefix added to both the link
+       and the joint child so the TF tree is consistent
+       with every other link when a namespace is used.
+  ─────────────────────────────────────────────────── -->
   <link name="${namespace}gps_link">
     <inertial>
       <mass value="0.01"/>
@@ -179,72 +187,37 @@
     <origin xyz="0.0 0.0 0.15" rpy="0 0 0"/>
   </joint>
 
-  <!--
-    ==================================================
-    Contact dynamics  -  the complete anti-drift tuning
-    ==================================================
-
-    Just setting mu1/mu2 is not enough. Three independent
-    effects need tuning to fully prevent drift:
-
-    1. STICK-SLIP at the wheels.
-       mu1=2.0 (original) is grippier than real rubber on
-       smooth flooring. ODE then alternates between stick
-       (no slip) and slip (kinetic friction), producing
-       tiny sideways pulses that integrate into drift.
-       mu1=mu2=1.0 stays in the smooth-friction regime.
-
-    2. CONTACT CHATTER at the caster.
-       The caster collision is a box. Edges and corners
-       enter and leave contact frame-by-frame as the body
-       oscillates by micrometre-scale amounts. kp (contact
-       stiffness) and kd (contact damping) make the contact
-       softly compliant so the box settles instead of
-       bouncing. minDepth lets ODE accept a tiny penetration
-       without applying a corrective velocity. minDepth is
-       the single most important parameter against drift.
-
-    3. MAX CORRECTING VELOCITY.
-       maxVel caps the corrective velocity ODE applies on
-       a constraint. Without it, a single penetrated frame
-       can launch the body sideways at metres per second for
-       one step - visible drift. 0.1 m/s is conservative.
-
-    Wheels also get fdir1 (primary friction direction), which
-    locks friction along the rolling direction and prevents
-    ODE from re-deriving the contact frame each step.
-  -->
-
+  <!-- ── Wheel friction (Gazebo) ──────────────────── -->
   <gazebo reference="${namespace}wheel_left_link">
-    <mu1>1.0</mu1>
-    <mu2>1.0</mu2>
-    <kp>1000000.0</kp>
-    <kd>100.0</kd>
-    <minDepth>0.001</minDepth>
-    <maxVel>0.1</maxVel>
-    <fdir1>1 0 0</fdir1>
+    <mu1>2.0</mu1>
+    <mu2>2.0</mu2>
   </gazebo>
 
   <gazebo reference="${namespace}wheel_right_link">
-    <mu1>1.0</mu1>
-    <mu2>1.0</mu2>
-    <kp>1000000.0</kp>
-    <kd>100.0</kd>
-    <minDepth>0.001</minDepth>
-    <maxVel>0.1</maxVel>
-    <fdir1>1 0 0</fdir1>
+    <mu1>2.0</mu1>
+    <mu2>2.0</mu2>
   </gazebo>
 
+  <!-- ── Caster friction (Gazebo) ─────────────────────
+       *** THE DRIFT FIX ***
+       The "caster" in this URDF is a fixed box rigidly
+       attached to base_link — it's a skid plate, NOT a
+       rolling caster wheel.  With Gazebo's default
+       friction (mu ≈ 1.0) the box drags on the floor
+       and creates asymmetric forces that push the
+       robot off its commanded path (visible drift,
+       especially during turns or at rest).
+
+       Setting mu1 = mu2 = 0 makes the caster frictionless
+       so it slides freely and the wheels alone determine
+       motion. This is the standard TurtleBot3 fix.
+  ─────────────────────────────────────────────────── -->
   <gazebo reference="${namespace}caster_back_link">
     <mu1>0.0</mu1>
     <mu2>0.0</mu2>
-    <kp>1000000.0</kp>
-    <kd>100.0</kd>
-    <minDepth>0.001</minDepth>
-    <maxVel>0.1</maxVel>
   </gazebo>
 
-  <!-- Sensor and actuator plugins -->
+  <!-- ── Sensor & actuator plugins ────────────────── -->
   <xacro:include filename="$(find robot_description_pkg)/urdf/tb3_sensors.gazebo.xacro"/>
 
 </robot>
