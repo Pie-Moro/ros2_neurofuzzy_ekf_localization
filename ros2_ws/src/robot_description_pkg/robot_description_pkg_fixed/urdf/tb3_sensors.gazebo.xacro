@@ -113,7 +113,7 @@
       <max_wheel_acceleration>1.0</max_wheel_acceleration>
 
       <publish_odom>true</publish_odom>
-      <publish_odom_tf>true</publish_odom_tf>   <!-- set false when an EKF takes over -->
+      <publish_odom_tf>false</publish_odom_tf>   <!-- set false when an EKF takes over -->
       <publish_wheel_tf>false</publish_wheel_tf>
       <odometry_frame>odom</odometry_frame>
       <robot_base_frame>${namespace}base_footprint</robot_base_frame>
