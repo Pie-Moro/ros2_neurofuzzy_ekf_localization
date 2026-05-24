@@ -1,32 +1,190 @@
-<root main_tree_to_execute="MainTree">
-    <BehaviorTree ID="MainTree">
-        <ReactiveFallback name="Localization_Strategy">
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  Behavior Tree: GPS / INS / Odometer Information Fusion                 ║
+  ║  Paper: "Information Fusion of GPS, INS and Odometer Sensors"           ║
+  ║  Robot: TurtleBot3 Burger (Gazebo / Real)                               ║
+  ║                                                                          ║
+  ║  ROS2 Topics consumed by this BT:                                        ║
+  ║    /gps/fix               ← GPS NavSatFix (availability check)           ║
+  ║    /imu/data              ← IMU (accel + angular velocity)               ║
+  ║    /odom                  ← Wheel Odometry                               ║
+  ║    /odometry/gps          ← GPS converted to ENU by navsat_transform     ║
+  ║    /odometry/global       ← KF1 output  (GPS + IMU EKF)                 ║
+  ║    /odometry/global2      ← KF2 output  (GPS + Odom EKF)                ║
+  ║    /ann/trajectory        ← ANN position estimate (from robot_brain)     ║
+  ║                                                                          ║
+  ║  ROS2 Topics published by this BT:                                       ║
+  ║    /odometry/bt_fused     ← BT-authoritative final position estimate     ║
+  ║    /bt/fuzzy_weights      ← Diagnostic: adaptive α1, α2 from FL         ║
+  ║    /bt/status             ← Diagnostic: current active branch            ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
 
-            <Sequence name="Outdoor_GPS_Sequence">
-                <CheckGpsSignal name="CheckGpsSignal"/> 
-                <RunDualEKF name="RunDualEKF"/>
-                <TrainNeuralNetwork name="TrainNeuralNetwork"/>
-            </Sequence>
+  TREE LOGIC (mirrors Fig.1 flowchart exactly):
 
-            <Sequence name="Indoor_NoGPS_Sequence">
-                <HaltEKF1_UpdateEKF2 name="HaltEKF1_UpdateEKF2"/>
-                <RunNeuralNetworkInference name="RunNeuralNetworkInference"/>
-                <CalculateSlipError name="CalculateSlipError"/>
-                <RunFuzzyLogicController name="RunFuzzyLogicController"/>
-                <FuseNN_and_EKF2 name="FuseNN_and_EKF2"/>
-            </Sequence>
+  Every tick (10 Hz):
+    1. Guard: All sensors (IMU, Odom) must be publishing → else skip tick
+    2. ReactiveFallback evaluates GPS availability each tick:
 
-        </ReactiveFallback>
-    </BehaviorTree>
+       [GPS AVAILABLE] → CheckGpsSignal = SUCCESS
+         a. AlignSensorFrames   – Verify GPS→ENU alignment is active (navsat_transform)
+         b. EnsureKF1Active     – Confirm /odometry/global is live
+         c. EnsureKF2Active     – Confirm /odometry/global2 is live
+         d. RunComplementaryFilter_GPS
+                                 Vec1=[ax,ay,x_gps,y_gps], Vec2=[vx,vy,x_gps,y_gps]
+                                 P1 = KF1 estimate, P2 = KF2 estimate
+                                 x_final = α1_fixed*P1.x + α2_fixed*P2.x  (α=0.5 each)
+         e. PublishFusedPosition_GPS  → /odometry/bt_fused
+         f. CollectAndTrainNN   – Feed [IMU, Odom, KF1, KF2] to ANN, trigger training
 
-    <TreeNodesModel>
-        <Condition ID="CheckGpsSignal"/>
-        <Action ID="RunDualEKF"/>
-        <Action ID="TrainNeuralNetwork"/>
-        <Action ID="HaltEKF1_UpdateEKF2"/>
-        <Action ID="RunNeuralNetworkInference"/>
-        <Action ID="CalculateSlipError"/>
-        <Action ID="RunFuzzyLogicController"/>
-        <Action ID="FuseNN_and_EKF2"/>
-    </TreeNodesModel>
+       [GPS UNAVAILABLE] → CheckGpsSignal = FAILURE → Fallback to Branch B
+         a. HaltKF1_FreezeKF2GPS  – Disable KF1 usage; hold last GPS for KF2 reference
+         b. CalculateSlipError    – e = |ω_IMU − ω_odom|  (IMU vs wheel angular rate)
+         c. FuzzifySlipError      – Compute μ_Low(e), μ_Medium(e), μ_High(e)
+         d. ActivateFuzzyRules    – Mamdani inference on slip MFs
+         e. DefuzzifyWeights      – Singleton WA → adaptive α1 (NN), α2 (KF2)
+         f. FuseNN_KF2_Adaptive   – x_final = α1*NN_pos + α2*KF2_pos
+                                    (falls back to KF2-only if NN not trained yet)
+            → publish /odometry/bt_fused
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+
+  <BehaviorTree ID="MainTree">
+    <Sequence name="Main_Orchestrator">
+
+      <!-- ═══════════════════════════════════════════════════════════════ -->
+      <!-- PHASE 0 — SENSOR READINESS GUARD                              -->
+      <!-- Blocks the BT until IMU and odometry are both publishing.     -->
+      <!-- After startup this always passes in < 1 tick.                 -->
+      <!-- ═══════════════════════════════════════════════════════════════ -->
+      <Condition ID="CheckSensorsReady" name="CheckSensorsReady"/>
+
+      <!-- ═══════════════════════════════════════════════════════════════ -->
+      <!-- PHASE 1 — REACTIVE LOCALIZATION STRATEGY                      -->
+      <!-- ReactiveFallback: re-checks GPS on every tick.                -->
+      <!-- If GPS recovers mid-flight, Branch A resumes immediately.     -->
+      <!-- ═══════════════════════════════════════════════════════════════ -->
+      <ReactiveFallback name="Localization_Strategy">
+
+        <!-- ─────────────────────────────────────────────────────────── -->
+        <!-- BRANCH A: GPS AVAILABLE                                     -->
+        <!-- All nodes run synchronously in the same tick.               -->
+        <!-- Matches left column of Fig.1 flowchart.                     -->
+        <!-- ─────────────────────────────────────────────────────────── -->
+        <Sequence name="GPS_Available_Branch">
+
+          <!-- Gate: GPS fix must be valid AND fresh (≤2 s old) -->
+          <Condition ID="CheckGpsSignal"           name="CheckGpsSignal"/>
+
+          <!-- Verify DCM frame alignment: navsat_transform must be
+               converting GPS → ENU and publishing /odometry/gps      -->
+          <Action ID="AlignSensorFrames"           name="AlignSensorFrames"/>
+
+          <!-- Confirm KF1 (ekf_filter_node_gps_imu) is live           -->
+          <Action ID="EnsureKF1Active"             name="EnsureKF1Active"/>
+
+          <!-- Confirm KF2 (ekf_filter_node_gps_enc) is live           -->
+          <Action ID="EnsureKF2Active"             name="EnsureKF2Active"/>
+
+          <!-- Fixed-weight Complementary Filter (paper §3.2):
+               P1 = [kf1_x, kf1_y]  (KF1 position estimate)
+               P2 = [kf2_x, kf2_y]  (KF2 position estimate)
+               x_final = α1*P1.x + α2*P2.x   α1 = α2 = 0.5          -->
+          <Action ID="RunComplementaryFilter_GPS"  name="RunComplementaryFilter_GPS"/>
+
+          <!-- Publish [x_final, y_final] → /odometry/bt_fused         -->
+          <Action ID="PublishFusedPosition_GPS"    name="PublishFusedPosition_GPS"/>
+
+          <!-- Collect NN_Train=[IMU, Odom, KF1, KF2] into buffer and
+               trigger ANN background training every 5 s               -->
+          <Action ID="CollectAndTrainNN"           name="CollectAndTrainNN"/>
+
+        </Sequence>
+
+        <!-- ─────────────────────────────────────────────────────────── -->
+        <!-- BRANCH B: GPS UNAVAILABLE                                   -->
+        <!-- Activated when CheckGpsSignal returns FAILURE.             -->
+        <!-- Matches right column of Fig.1 flowchart.                   -->
+        <!-- ─────────────────────────────────────────────────────────── -->
+        <Sequence name="GPS_Unavailable_Branch">
+
+          <!-- StopKF1 + Update KF2 with last known GPS position        -->
+          <Action ID="HaltKF1_FreezeKF2GPS"        name="HaltKF1_FreezeKF2GPS"/>
+
+          <!-- Slip detection: e = |ω_IMU(z) − ω_odom(z)|  [rad/s]    -->
+          <Action ID="CalculateSlipError"           name="CalculateSlipError"/>
+
+          <!-- Fuzzy Membership Functions (triangular, 3 sets):
+               μ_Low(e)    – peaks at 0,    zero at 0.10
+               μ_Medium(e) – peaks at 0.15, zero at 0.05 & 0.25
+               μ_High(e)   – peaks at 0.30, zero at 0.20             -->
+          <Action ID="FuzzifySlipError"             name="FuzzifySlipError"/>
+
+          <!-- Mamdani Rule Activation:
+               R1: IF e IS Low    THEN α1 IS High,   α2 IS Low
+               R2: IF e IS Medium THEN α1 IS Medium, α2 IS Medium
+               R3: IF e IS High   THEN α1 IS Low,    α2 IS High      -->
+          <Action ID="ActivateFuzzyRules"           name="ActivateFuzzyRules"/>
+
+          <!-- Singleton Weighted-Average Defuzzification:
+               α1 = Σ(μ_i * c1_i) / Σ(μ_i)    (NN weight)
+               α2 = Σ(μ_i * c2_i) / Σ(μ_i)    (KF2 weight)
+               guarantees α1 + α2 = 1.0                              -->
+          <Action ID="DefuzzifyWeights"             name="DefuzzifyWeights"/>
+
+          <!-- Adaptive FL Complementary Filter:
+               x_final = α1 * NN_x  + α2 * KF2_x
+               y_final = α1 * NN_y  + α2 * KF2_y
+               Fallback: if NN not trained → use KF2 only (α2 = 1.0)
+               → publish /odometry/bt_fused                          -->
+          <Action ID="FuseNN_KF2_Adaptive"          name="FuseNN_KF2_Adaptive"/>
+
+        </Sequence>
+
+      </ReactiveFallback>
+
+    </Sequence>
+  </BehaviorTree>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- NODE MODEL REGISTRY (for Groot2 visualization)                    -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <TreeNodesModel>
+
+    <!-- Conditions -->
+    <Condition ID="CheckSensorsReady"
+               description="SUCCESS when /imu/data AND /odom are both live"/>
+    <Condition ID="CheckGpsSignal"
+               description="SUCCESS when /gps/fix has a valid fix received within 2 s"/>
+
+    <!-- Branch A Actions -->
+    <Action ID="AlignSensorFrames"
+            description="Verify navsat_transform is publishing /odometry/gps (ENU frame)"/>
+    <Action ID="EnsureKF1Active"
+            description="Check /odometry/global is live; set kf1_active=true"/>
+    <Action ID="EnsureKF2Active"
+            description="Check /odometry/global2 is live; set kf2_active=true"/>
+    <Action ID="RunComplementaryFilter_GPS"
+            description="Compute x=0.5*KF1 + 0.5*KF2 (fixed-weight CF)"/>
+    <Action ID="PublishFusedPosition_GPS"
+            description="Publish GPS-branch result to /odometry/bt_fused"/>
+    <Action ID="CollectAndTrainNN"
+            description="Push [IMU,Odom,KF1,KF2] to ANN buffer; trigger training if ≥500 samples"/>
+
+    <!-- Branch B Actions -->
+    <Action ID="HaltKF1_FreezeKF2GPS"
+            description="Set kf1_active=false; latch last known GPS position for KF2 reference"/>
+    <Action ID="CalculateSlipError"
+            description="Compute slip e = |imu_wz − odom_wz|"/>
+    <Action ID="FuzzifySlipError"
+            description="Compute triangular MF values: μ_Low, μ_Medium, μ_High"/>
+    <Action ID="ActivateFuzzyRules"
+            description="Mamdani: 3 rules mapping slip error to weight singletons"/>
+    <Action ID="DefuzzifyWeights"
+            description="Weighted-average defuzz → adaptive α1 (NN) and α2 (KF2)"/>
+    <Action ID="FuseNN_KF2_Adaptive"
+            description="Fuse NN+KF2 with adaptive weights; publish /odometry/bt_fused"/>
+
+  </TreeNodesModel>
+
 </root>

@@ -1,16 +1,46 @@
 <?xml version="1.0"?>
-<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd"
+            schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>bt_orchestrator_pkg</name>
-  <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <version>1.0.0</version>
+  <description>
+    Behavior Tree orchestrator for GPS/INS/Odometer sensor fusion.
+    Implements the dual-branch (GPS / No-GPS) localization strategy from
+    the paper "Information Fusion of GPS, INS and Odometer Sensors".
+    Publishes the authoritative fused position on /odometry/bt_fused.
+  </description>
   <maintainer email="yousef_hesham.yh112@icloud.com">yousefabdelhady</maintainer>
-  <license>TODO: License declaration</license>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <!-- Core ROS2 runtime -->
   <depend>rclcpp</depend>
   <depend>behaviortree_cpp_v3</depend>
+
+  <!-- Message types -->
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+
+  <!-- Package share path resolution -->
+  <depend>ament_index_cpp</depend>
+
+  <!-- Launch system -->
+  <exec_depend>ros2launch</exec_depend>
+
+  <!-- Runtime dependencies (nodes launched by system.launch.py) -->
+  <exec_depend>robot_description_pkg</exec_depend>
+  <exec_depend>gps_ins_pkg</exec_depend>
+  <exec_depend>gps_odometry_pkg</exec_depend>
+  <exec_depend>control_pkg</exec_depend>
+  <exec_depend>robot_control_brain</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
+  <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>rviz2</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

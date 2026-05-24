@@ -5,41 +5,67 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-
-find_package(rclcpp REQUIRED)
+# ── Required packages ─────────────────────────────────────────────────────────
+find_package(ament_cmake        REQUIRED)
+find_package(rclcpp             REQUIRED)
 find_package(behaviortree_cpp_v3 REQUIRED)
 
+# ROS2 message packages
+find_package(sensor_msgs        REQUIRED)
+find_package(nav_msgs           REQUIRED)
+find_package(geometry_msgs      REQUIRED)
+find_package(std_msgs           REQUIRED)
+
+# For resolving the installed XML path at runtime
+find_package(ament_index_cpp    REQUIRED)
+
+# ── Expose include directory (for indoor_detector.hpp) ───────────────────────
+include_directories(include)
+
+# ── Executable ───────────────────────────────────────────────────────────────
 add_executable(bt_brain src/main.cpp)
-ament_target_dependencies(bt_brain rclcpp behaviortree_cpp_v3)
+
+ament_target_dependencies(bt_brain
+  rclcpp
+  behaviortree_cpp_v3
+  sensor_msgs
+  nav_msgs
+  geometry_msgs
+  std_msgs
+  ament_index_cpp
+)
+
+# ── Install ───────────────────────────────────────────────────────────────────
+# Install the header so other packages can reuse IndoorDetector
+install(DIRECTORY include/
+  DESTINATION include
+)
 
 install(TARGETS
   bt_brain
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Optional: Install the XML folder so it copies to the install directory
+# Install the BT XML so it's found via ament_index at runtime
 install(DIRECTORY bt_xml/
   DESTINATION share/${PROJECT_NAME}/bt_xml
 )
 
+# Install launch files
+install(DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch
+)
 
+# Install RViz config (if present)
+install(DIRECTORY rviz/
+  OPTIONAL
+  DESTINATION share/${PROJECT_NAME}/rviz
+)
 
-
-
-
-# find dependencies
-find_package(ament_cmake REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(behaviortree_cpp_v3 REQUIRED)
-
+# ── Tests ─────────────────────────────────────────────────────────────────────
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # comment the line when a copyright and license is added to all source files
   set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # comment the line when this package is in a git repo and when
-  # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
