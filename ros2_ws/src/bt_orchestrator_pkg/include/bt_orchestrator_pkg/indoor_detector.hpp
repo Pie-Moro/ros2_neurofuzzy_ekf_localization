@@ -111,10 +111,10 @@ public:
         // Pre-calibrated from indoor_outdoor.world <state> section.
         // Outer walls:  X∈[-10.862, 11.199]   Y∈[-4.149, 4.551]
         // 0.35 m margin inset (wall thickness 0.15 m + 0.20 m clearance):
-        double building_x_min_world = -10.512;   // west  inner edge
-        double building_x_max_world = +10.849;   // east  inner edge
-        double building_y_min_world =  -3.799;   // south inner edge
-        double building_y_max_world =  +4.201;   // north inner edge
+        double building_x_min_world = -10.0;   // west  inner edge
+        double building_x_max_world = +10.0;   // east  inner edge
+        double building_y_min_world = -4.5;   // south inner edge
+        double building_y_max_world = +4.5;   // north inner edge
 
         // Robot spawn position in world frame (from spawn_robot.launch.py)
         double spawn_world_x       = 5.0;
@@ -123,7 +123,7 @@ public:
         // Wall margin already baked into the AABB above.
         // hysteresis_m: extra clearance the robot must travel PAST the inner
         // boundary before OUTDOOR is declared (prevents wall oscillation).
-        double hysteresis_m        = 0.50;
+        double hysteresis_m        = 0.10;
 
         // ── GPS QUALITY SCORING (secondary path / real hardware) ─────────────
         // Covariance [m²] – guard removed; always evaluated (fixes Gazebo bug)

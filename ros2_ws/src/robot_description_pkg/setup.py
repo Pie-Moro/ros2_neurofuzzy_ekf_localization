@@ -3,13 +3,13 @@ from setuptools import setup, find_packages
 
 package_name = 'robot_description_pkg'
 
-
 def generate_data_files():
     data_files = [
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ]
 
+    # Install all asset directories into the share space
     directories_to_install = ['launch', 'worlds', 'urdf', 'models', 'meshes']
 
     for directory in directories_to_install:
@@ -21,7 +21,6 @@ def generate_data_files():
 
     return data_files
 
-
 setup(
     name=package_name,
     version='0.0.0',
@@ -32,11 +31,13 @@ setup(
     maintainer='yousefabdelhady',
     maintainer_email='yousef_hesham.yh112@icloud.com',
     description='ROS 2 robot description package for a customised TurtleBot3 Burger '
-                'with Gazebo Classic simulation, IMU, and GPS sensors.',
+                'with Gazebo Classic simulation, LiDAR, IMU, and GPS sensors.',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
-        # No executable nodes in this description-only package.
+        # No executable nodes in this package.
+        # Add entries here if controller nodes are added under
+        # robot_description_pkg/controllers/.
         'console_scripts': [],
     },
 )

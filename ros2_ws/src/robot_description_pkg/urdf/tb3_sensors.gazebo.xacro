@@ -2,20 +2,32 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <!--
-    Gazebo sensor and actuator plugins.
+    Gazebo sensor & actuator plugins for the customised TurtleBot3 Burger.
 
-    Included by tb3_custom.urdf.xacro which defines ${namespace}.
-    Sensors:  IMU (libgazebo_ros_imu_sensor.so) -> /imu/data
-              GPS (libgazebo_ros_gps_sensor.so) -> /gps/fix
-    Actuator: differential drive (libgazebo_ros_diff_drive.so)
-              -> /cmd_vel (sub), /odom (pub)
+    Included by tb3_custom.urdf.xacro which defines the ${namespace}
+    xacro property, so all link / joint / frame references here use
+    that same prefix.
 
-    There is intentionally NO LiDAR plugin; this project does
-    not use a laser scanner. The base_scan link in the URDF is
-    kept for its visual mesh only.
+    Sensors
+    ======
+    1. IMU        — libgazebo_ros_imu_sensor.so   → /imu/data
+    2. GPS        — libgazebo_ros_gps_sensor.so   → /gps/fix
+
+    NOTE: The base_scan link in the URDF is kept only for its visual
+    mesh (so the robot still looks correct). There is intentionally
+    NO LiDAR sensor plugin — this project does not use a laser scanner.
+
+    Actuator
+    ======-
+    3. Diff-drive — libgazebo_ros_diff_drive.so   → /cmd_vel, /odom
   -->
 
-  <!-- IMU (100 Hz) -->
+  <!-- ═══════════════════════════════════════════════
+       1.  IMU  (BMI160-like — 100 Hz)
+       Now uses ${namespace}imu_link so the TF and
+       gazebo reference stay consistent under any
+       namespace.
+  ═══════════════════════════════════════════════════ -->
   <gazebo reference="${namespace}imu_link">
     <sensor name="tb3_imu" type="imu">
       <always_on>true</always_on>
@@ -43,7 +55,10 @@
     </sensor>
   </gazebo>
 
-  <!-- GPS (5 Hz) -->
+  <!-- ═══════════════════════════════════════════════
+       2.  GPS  (5 Hz, ~0.32 m horizontal stddev)
+       Now uses ${namespace}gps_link.
+  ═══════════════════════════════════════════════════ -->
   <gazebo reference="${namespace}gps_link">
     <sensor name="tb3_gps" type="gps">
       <always_on>true</always_on>
@@ -68,7 +83,18 @@
     </sensor>
   </gazebo>
 
-  <!-- Differential drive (30 Hz) -->
+  <!-- ═══════════════════════════════════════════════
+       3.  Differential Drive  (30 Hz)
+       Fixes vs. original:
+         - left/right joint names use ${namespace} so
+           the plugin finds the joints in any namespace.
+         - robot_base_frame uses ${namespace}.
+         - publish_odom_tf = true so the odom → base_footprint
+           TF is published  and the package works standalone.
+           Switch to false if/when you add an EKF node
+           (e.g. robot_localization) that will own that
+           edge of the TF tree.
+  ═══════════════════════════════════════════════════ -->
   <gazebo>
     <plugin name="tb3_diff_drive" filename="libgazebo_ros_diff_drive.so">
       <ros>
@@ -87,7 +113,7 @@
       <max_wheel_acceleration>1.0</max_wheel_acceleration>
 
       <publish_odom>true</publish_odom>
-      <publish_odom_tf>true</publish_odom_tf>
+      <publish_odom_tf>false</publish_odom_tf>   <!-- set false when an EKF takes over -->
       <publish_wheel_tf>false</publish_wheel_tf>
       <odometry_frame>odom</odometry_frame>
       <robot_base_frame>${namespace}base_footprint</robot_base_frame>
