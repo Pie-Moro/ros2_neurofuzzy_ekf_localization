@@ -19,18 +19,22 @@
  *
  *   2. PRE-CALIBRATED FOR indoor_outdoor.world
  *        Outer wall positions extracted directly from the world file
- *        <state> section (ground-truth runtime poses):
- *          North  Y = +4.551 m   (Wall_9, Wall_14, Wall_16)
- *          South  Y = -4.149 m   (Wall_22, Wall_24, Wall_27)
- *          East   X = +11.199 m  (Wall_13, Wall_25)
- *          West   X = -10.862 m  (Wall_18, Wall_21)
- *        Building: 22.06 m × 8.70 m, center (0.169, 0.201)
+ *        <state> section (ground-truth runtime poses), wall thickness = 0.1500 m:
+ *          WEST   inner face = -10.7814 m  (Wall_18 ctr=-10.8616, Wall_21 ctr=-10.8564)
+ *          EAST   inner face = +11.1238 m  (Wall_13, Wall_25 ctr=+11.1988)
+ *          SOUTH  inner face =  -4.0740 m  (Wall_22, Wall_24, Wall_27 ctr=-4.1490)
+ *          NORTH  inner face =  +4.4669 m  (Wall_9 ctr=+4.5419, Wall_14/16 ctr=+4.5510)
+ *        Interior cavity: 21.91 m (E-W) × 8.54 m (N-S)
+ *        AABB (inner face + 0.20 m safety inset): X∈[-10.58, 10.92]  Y∈[-3.87, 4.27]
  *
- *   3. WORLD-FRAME AABB via spawn-offset correction
- *        /odom position (origin = spawn point) is shifted by the known
- *        robot spawn coordinates (world x=5.0, y=6.5) so the geofence
- *        ALWAYS operates in world frame regardless of spawn location.
- *        Update `spawn_world_x / spawn_world_y` in Config for a new map.
+ *   3. WORLD-FRAME AABB via /odom (no spawn offset)
+ *        /odom is published by Gazebo's diff_drive plugin initialised at the
+ *        robot's world-frame spawn pose, so odom == world frame directly.
+ *        Config::spawn_world_x/y must be 0.0 (not the physical spawn coords).
+ *        Previous versions incorrectly added (5.0, 6.5) which double-shifted
+ *        the position: the robot appeared 6.5 m north of its true location,
+ *        triggering false INDOOR when it was south of the building and missing
+ *        INDOOR when it was actually inside.
  *
  *   4. MAP-AGNOSTIC FALLBACK
  *        Setting `use_geofence = false` disables the AABB and relies
@@ -56,12 +60,12 @@
  *       y_min = minimum Y of any outer NORTH-or-SOUTH wall
  *       y_max = maximum Y of any outer NORTH-or-SOUTH wall
  *  4. Set Config fields:
- *       building_x_min_world = x_min
- *       building_x_max_world = x_max
- *       building_y_min_world = y_min
- *       building_y_max_world = y_max
- *       spawn_world_x = <robot spawn X from launch file>
- *       spawn_world_y = <robot spawn Y from launch file>
+ *       building_x_min_world = x_min + 0.35   (inset for wall thickness)
+ *       building_x_max_world = x_max - 0.35
+ *       building_y_min_world = y_min + 0.35
+ *       building_y_max_world = y_max - 0.35
+ *       spawn_world_x = 0.0   ← /odom is world frame; no offset needed
+ *       spawn_world_y = 0.0   ← (Gazebo diff_drive initialises at world pose)
  *  5. Leave `wall_margin_m = 0.35` (covers wall thickness + tolerance).
  *  6. Leave `hysteresis_m = 0.50` (prevents boundary oscillation).
  * ============================================================================
@@ -108,17 +112,45 @@ public:
         bool   use_geofence        = true;
 
         // Building outer boundary in WORLD frame [m]
-        // Pre-calibrated from indoor_outdoor.world <state> section.
-        // Outer walls:  X∈[-10.862, 11.199]   Y∈[-4.149, 4.551]
-        // 0.35 m margin inset (wall thickness 0.15 m + 0.20 m clearance):
-        double building_x_min_world = -10.0;   // west  inner edge
-        double building_x_max_world = +10.0;   // east  inner edge
-        double building_y_min_world = -4.5;   // south inner edge
-        double building_y_max_world = +4.5;   // north inner edge
+        // Derived from indoor_outdoor.world <state> section — all wall thicknesses = 0.1500 m.
+        //
+        //  Wall centres (world frame):
+        //    WEST:  Wall_18 x=-10.8616, Wall_21 x=-10.8564
+        //    EAST:  Wall_13 x=+11.1988, Wall_25 x=+11.1988
+        //    SOUTH: Wall_22 y=-4.1490,  Wall_24 y=-4.1490,  Wall_27 y=-4.1490
+        //    NORTH: Wall_9  y=+4.5419,  Wall_14 y=+4.5510,  Wall_16 y=+4.5510
+        //
+        //  Exact inner faces (centre ± half-thickness 0.075 m):
+        //    west_inner  = -10.7814 m     east_inner  = +11.1238 m
+        //    south_inner =  -4.0740 m     north_inner =  +4.4669 m
+        //    Interior cavity: 21.9052 m (E-W) × 8.5409 m (N-S)
+        //
+        //  AABB = inner face + 0.20 m safety inset (absorbs GPS noise ≈ 0.32 m std):
+        double building_x_min_world = -10.58;  // west  inner face (-10.7814) + 0.20 m
+        double building_x_max_world = +10.92;  // east  inner face (+11.1238) - 0.20 m
+        double building_y_min_world =  -3.87;  // south inner face ( -4.0740) + 0.20 m
+        double building_y_max_world =  +4.27;  // north inner face ( +4.4669) - 0.20 m
 
-        // Robot spawn position in world frame (from spawn_robot.launch.py)
-        double spawn_world_x       = 5.0;
-        double spawn_world_y       = 6.5;
+        // FIX: spawn offset must be ZERO.
+        //
+        // The /odom topic published by Gazebo's diff_drive plugin is initialised
+        // at the robot's world-frame spawn pose, so odom (x, y) == world (x, y).
+        // The original non-zero values (5.0, 6.5) double-counted the spawn offset:
+        //
+        //   det_world = odom + (5, 6.5) = world + (5, 6.5)   ← WRONG (2× shift)
+        //
+        // Effect of the bug:
+        //   • Robot at world (1.14, −10.14) — 6 m south of the building — was
+        //     reported as det_world (6.15, −3.65), which lies inside the AABB
+        //     → false INDOOR → BT forced to NO_GPS branch ("GPS outage").
+        //   • Robot actually inside building (world Y ≈ 0.93) was reported as
+        //     det_world (X, 7.43), which lies north of the AABB Y_max → missed
+        //     INDOOR detection while the robot was traversing the building.
+        //
+        // With spawn = (0, 0):
+        //   det_world = odom = world   ← correct
+        double spawn_world_x       = 0.0;   // /odom is already world frame
+        double spawn_world_y       = 0.0;   // /odom is already world frame
 
         // Wall margin already baked into the AABB above.
         // hysteresis_m: extra clearance the robot must travel PAST the inner
@@ -377,9 +409,11 @@ private:
 
         if (!cfg_.use_geofence) return;
 
-        // Shift odom frame → world frame using known spawn coordinates
-        double wx = odom_x_ + cfg_.spawn_world_x;
-        double wy = odom_y_ + cfg_.spawn_world_y;
+        // /odom is initialised at the robot's world-frame spawn pose by Gazebo's
+        // diff_drive plugin, so odom (x, y) == world (x, y) directly.
+        // cfg_.spawn_world_x/y are kept as 0.0 (no offset needed).
+        double wx = odom_x_ + cfg_.spawn_world_x;   // = odom_x  (spawn = 0)
+        double wy = odom_y_ + cfg_.spawn_world_y;   // = odom_y  (spawn = 0)
 
         check_geofence(wx, wy);
     }

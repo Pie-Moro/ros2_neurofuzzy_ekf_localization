@@ -4,7 +4,11 @@ ekf_local2: # it has continous state estimation
     frequency: 30.0
     sensor_timeout: 0.5
     two_d_mode: true
-    publish_tf: true # publish the transform from map to base_link, so we can visualize it in rviz and use it for navigation
+    # FIX 2a: publish_tf set to FALSE.
+    # ekf_local (EKF1) already owns the odom → base_footprint TF edge.
+    # A second publisher on the same edge causes TF tree instability and
+    # is the main reason /odometry/local2 and /odom appear to oscillate.
+    publish_tf: false
     
     map_frame: map
     odom_frame: odom
@@ -57,7 +61,11 @@ ekf_filter_node_gps_enc:
     frequency: 30.0
     sensor_timeout: 0.5
     two_d_mode: true
-    publish_tf: true 
+    # FIX 2b: publish_tf set to FALSE.
+    # ekf_filter_node_gps_imu (EKF1 global) already owns the map → odom TF edge.
+    # Two nodes competing to publish the same TF edge cause the entire map frame
+    # to jump erratically, producing the rotated/offset trajectory in PlotJuggler.
+    publish_tf: false
     
     map_frame: map
     odom_frame: odom
@@ -77,6 +85,17 @@ ekf_filter_node_gps_enc:
                    false, false, false,
                    false, false, false,
                    false, false, false]
+
+    # FIX: Same initial_state as EKF1 global — both EKFs must agree on the
+    # starting position so /odometry/global and /odometry/global2 are
+    # co-located from tick 1 and the complementary filter output is correct.
+    # Order: x  y  z  roll  pitch  yaw  vx  vy  vz  vroll  vpitch  vyaw  ax  ay  az
+    initial_state: [5.0, 6.5, 0.0,
+                    0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0]
+
     process_noise_covariance: [
           0.00016, 0.0,     0.0, 0.0,  0.0,  0.0,     0.0,    0.0,      0.0, 0.0,  0.0,  0.0, 0.0,    0.0,    0.0, # x
           0.0,     0.00041, 0.0, 0.0,  0.0,  0.0,     0.0,    0.0,      0.0, 0.0,  0.0,  0.0, 0.0,    0.0,    0.0, # y
@@ -98,12 +117,16 @@ ekf_filter_node_gps_enc:
 navsat_transform2:
   ros__parameters:
       frequency: 30.0
-      delay: 5.0
-      magnetic_declination_radians: 0.0  # For lat/long 55.944831, -3.186998
-      yaw_offset: 0.0  # IMU reads 0 facing magnetic north, not east
-      zero_altitude: false
+      delay: 3.0
+      magnetic_declination_radians: 0.0
+      yaw_offset: 0.0
+      zero_altitude: true
       broadcast_utm_transform: true
       publish_filtered_gps: true
       use_odometry_yaw: true
+      # DATUM = Gazebo world origin, same as navsat_transform in ekf_1.yaml.
+      # Both transforms must use the identical datum so /odometry/global and
+      # /odometry/global2 diverge only due to sensor fusion differences, not
+      # a mismatched map frame origin.
       wait_for_datum: false
-
+      datum: [45.0500, 7.6600, 0.0]

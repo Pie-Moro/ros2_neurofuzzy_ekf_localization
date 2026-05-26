@@ -235,22 +235,18 @@ def generate_launch_description() -> LaunchDescription:
         arguments=['--ros-args', '--log-level', log_level],
     )
 
-    # NavSat Transform 2 (second independent GPS→ENU pipeline)
-    navsat2 = Node(
-        package='robot_localization',
-        executable='navsat_transform_node',
-        name='navsat_transform2',
-        output='screen',
-        parameters=[cfg_ekf2, sim_time_param],
-        remappings=[
-            ('imu',               '/imu/data'),
-            ('gps/fix',           '/gps/fix'),
-            ('gps/filtered',      '/gps/filtered'),
-            ('odometry/gps',      '/odometry/gps'),
-            ('odometry/filtered', '/odometry/global2'),
-        ],
-        arguments=['--ros-args', '--log-level', log_level],
-    )
+    # FIX 3: navsat_transform2 has been removed.
+    # Both navsat_transform instances were publishing to the same /odometry/gps
+    # topic with different odometry sources, causing a non-deterministic race
+    # condition: whichever node wrote last "won", corrupting the GPS→ENU
+    # conversion that both EKF1 and EKF2 depend on.
+    #
+    # Solution: a single navsat_transform (navsat1, fed by EKF1's global
+    # odometry for heading) publishes /odometry/gps once.  Both
+    # ekf_filter_node_gps_imu and ekf_filter_node_gps_enc read the same
+    # /odometry/gps topic — this is correct because the GPS hardware is one
+    # physical sensor and its ENU projection does not change depending on
+    # which EKF reads it.
 
     phase2 = TimerAction(
         period=ekf_delay,
@@ -258,10 +254,9 @@ def generate_launch_description() -> LaunchDescription:
             phase2_log,
             ekf1_local,
             ekf1_global,
-            navsat1,
+            navsat1,    # Single navsat_transform feeds both EKF1 and EKF2
             ekf2_local,
             ekf2_global,
-            navsat2,
         ]
     )
 
@@ -301,12 +296,17 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ── Trajectory Controller ─────────────────────────────────────────────────
-    # Subscribes : /odom  (raw wheel odometry for feedback control)
-    # Publishes  : /cmd_vel  (velocity commands to drive through waypoints)
+    # FIX 4: Remapped feedback from raw /odom → /odometry/global (EKF1 output).
+    # Raw wheel odometry drifts freely in the odom frame.  The controller was
+    # therefore computing waypoint errors in a frame that diverged from the map
+    # frame over time, causing the robot to navigate to the wrong world positions.
+    # /odometry/global is GPS+IMU corrected and lives in the map frame, so
+    # waypoint coordinates (which are map-frame targets) are now consistent with
+    # the robot's actual position estimate.
     #
-    # NOTE: The controller currently uses raw /odom for its feedback loop.
-    # For higher accuracy navigation, remap to /odometry/bt_fused:
-    #   remappings=[('/odom', '/odometry/bt_fused')]
+    # NOTE: ekf_local (EKF1) starts at ekf_delay (default 8s), before this node
+    # at fusion_delay (default 12s), so /odometry/global is guaranteed to be
+    # publishing before the controller needs it.
     trajectory_controller = Node(
         package='control_pkg',
         executable='trajectory_controller',

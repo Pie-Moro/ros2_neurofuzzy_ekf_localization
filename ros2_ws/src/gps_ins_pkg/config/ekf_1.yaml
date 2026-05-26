@@ -87,6 +87,19 @@ ekf_filter_node_gps_imu: # Global state estimation, it has discrete updates when
                   false,  false, false,
                   false, false, false,
                   false, false, false]
+
+    # FIX: Start EKF at the robot spawn position in the map frame.
+    # Without this the EKF initialises at map (0,0) and takes ~30 s to
+    # converge to the actual spawn (5.0, 6.5), causing all GPS-corrected
+    # topics to appear shifted from /odom in PlotJuggler during that window.
+    # With this line the EKF is at the correct position from tick 1.
+    # Order: x  y  z  roll  pitch  yaw  vx  vy  vz  vroll  vpitch  vyaw  ax  ay  az
+    initial_state: [5.0, 6.5, 0.0,
+                    0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0]
+
     # Covarianza processo (Q1)
     # take care that in the paper they use different orders for the state vector, so we have to be careful to put the right values in the right place
     # also we should give 15 values, not 11 as paper gave us
@@ -114,12 +127,18 @@ ekf_filter_node_gps_imu: # Global state estimation, it has discrete updates when
 navsat_transform:
   ros__parameters:
       frequency: 30.0
-      delay: 5.0
-      magnetic_declination_radians: 0.0  # For lat/long 55.944831, -3.186998
-      yaw_offset: 0.0  
-      zero_altitude: false
+      delay: 3.0
+      magnetic_declination_radians: 0.0
+      yaw_offset: 0.0
+      zero_altitude: true
       broadcast_utm_transform: true
       publish_filtered_gps: true
       use_odometry_yaw: true
+      # DATUM = Gazebo world origin (matches indoor_outdoor.world spherical_coordinates).
+      # With this datum: map frame == Gazebo world frame.
+      # Robot spawns at Gazebo world (5.0, 6.5) → GPS reports map (5.0, 6.5)
+      # → /odom also starts at (5.0, 6.5) → all topics share the same reference.
+      # The global EKF is initialised at (5.0, 6.5) via initial_state above, so
+      # /odometry/global is correct from tick 1 and there is no visible shift in PlotJuggler.
       wait_for_datum: false
-
+      datum: [45.0500, 7.6600, 0.0]
