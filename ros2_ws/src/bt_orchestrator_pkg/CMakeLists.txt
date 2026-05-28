@@ -9,6 +9,9 @@ endif()
 find_package(ament_cmake        REQUIRED)
 find_package(rclcpp             REQUIRED)
 find_package(behaviortree_cpp_v3 REQUIRED)
+find_package(tf2           REQUIRED)
+find_package(tf2_ros       REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 
 # ROS2 message packages
 find_package(sensor_msgs        REQUIRED)
@@ -33,6 +36,19 @@ ament_target_dependencies(bt_brain
   geometry_msgs
   std_msgs
   ament_index_cpp
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
+
+# Explicit linkage of tf2 imported targets.
+# ament_target_dependencies sets include dirs and populates ament's variable
+# lists, but in Humble the actual .so linkage for tf2/tf2_ros requires the
+# CMake imported targets directly — otherwise the linker throws
+# "undefined reference to tf2_ros::TransformBroadcaster / Buffer" etc.
+target_link_libraries(bt_brain
+  tf2::tf2
+  tf2_ros::tf2_ros
 )
 
 # ── Install ───────────────────────────────────────────────────────────────────

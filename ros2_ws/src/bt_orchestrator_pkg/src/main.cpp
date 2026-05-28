@@ -68,6 +68,15 @@
 // u2500u2500 Indoor / Outdoor environment classifier u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
 #include "bt_orchestrator_pkg/indoor_detector.hpp"
 
+// ── TF2 ──────────────────────────────────────────────────────────────────────
+#include "tf2_ros/transform_broadcaster.h"
+#include "tf2_ros/transform_listener.h"
+#include "tf2_ros/buffer.h"
+#include "tf2/LinearMath/Transform.h"
+#include "tf2/LinearMath/Quaternion.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
+
 using namespace BT;
 using namespace std::chrono_literals;
 
@@ -135,6 +144,11 @@ struct RobotState {
     bool   gps_odom_ready     = false;   // navsat_transform is publishing
     double gps_odom_timestamp = 0.0;     // seconds since epoch
 
+    // ── BT-driven TF: map → odom ───────────────────────────────────────────
+    bool bt_fused_valid                              = false;
+    bool map_to_odom_valid                           = false;
+    geometry_msgs::msg::TransformStamped map_to_odom_cached;
+    
     // ── IMU ──────────────────────────────────────────────────────────────────
     double imu_ax      = 0.0;
     double imu_ay      = 0.0;
@@ -252,19 +266,49 @@ public:
         sub_odom_ = create_subscription<nav_msgs::msg::Odometry>(
             "/odom", rclcpp::QoS(10),
             [this](const nav_msgs::msg::Odometry::SharedPtr msg) {
-                std::lock_guard<std::mutex> lk(state->mtx);
-                state->odom_x   = msg->pose.pose.position.x;
-                state->odom_y   = msg->pose.pose.position.y;
-                state->odom_vx  = msg->twist.twist.linear.x;
-                state->odom_vy  = msg->twist.twist.linear.y;
-                state->odom_wz  = msg->twist.twist.angular.z;
-                // Extract yaw from quaternion
-                const auto& q = msg->pose.pose.orientation;
-                double siny   = 2.0 * (q.w * q.z + q.x * q.y);
-                double cosy   = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
-                state->odom_yaw  = std::atan2(siny, cosy);
-                state->odom_ready = true;
-                state->odom_ts    = rclcpp::Time(msg->header.stamp).seconds();
+                // ── State update (under mutex) ────────────────────────────
+                {
+                    std::lock_guard<std::mutex> lk(state->mtx);
+                    state->odom_x   = msg->pose.pose.position.x;
+                    state->odom_y   = msg->pose.pose.position.y;
+                    state->odom_vx  = msg->twist.twist.linear.x;
+                    state->odom_vy  = msg->twist.twist.linear.y;
+                    state->odom_wz  = msg->twist.twist.angular.z;
+                    // Extract yaw from quaternion
+                    const auto& q = msg->pose.pose.orientation;
+                    double siny   = 2.0 * (q.w * q.z + q.x * q.y);
+                    double cosy   = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+                    state->odom_yaw  = std::atan2(siny, cosy);
+                    state->odom_ready = true;
+                    state->odom_ts    = rclcpp::Time(msg->header.stamp).seconds();
+                }
+
+                // ── Publish odom→base_footprint TF (outside mutex) ───────
+                // ROOT-CAUSE FIX: ekf_local silently fails to publish
+                // odom→base_footprint with use_sim_time:true in Humble
+                // (zero log output from all ekf_node processes confirms this).
+                // Without this edge the entire TF chain is broken:
+                //   bt_brain bootstrap  →  map→odom  (identity, 30 Hz)
+                //   THIS CALLBACK       →  odom→base_footprint  (~50 Hz)
+                //   composed            →  map→base_footprint
+                //   navsat_transform can now find map→base_footprint and
+                //   initialize GPS→ENU → /odometry/gps starts publishing
+                //   → global EKFs receive GPS → bt_fused correct
+                //   → update_map_to_odom_tf() replaces identity with real TF.
+                //
+                // tf_broadcaster_ is initialised after sub_odom_ in the ctor
+                // but this lambda only fires in the spin thread (post-ctor).
+                if (tf_broadcaster_) {
+                    geometry_msgs::msg::TransformStamped odom_tf;
+                    odom_tf.header.stamp    = msg->header.stamp;
+                    odom_tf.header.frame_id = "odom";
+                    odom_tf.child_frame_id  = "base_footprint";
+                    odom_tf.transform.translation.x = msg->pose.pose.position.x;
+                    odom_tf.transform.translation.y = msg->pose.pose.position.y;
+                    odom_tf.transform.translation.z = msg->pose.pose.position.z;
+                    odom_tf.transform.rotation      = msg->pose.pose.orientation;
+                    tf_broadcaster_->sendTransform(odom_tf);
+                }
             });
 
         // /odometry/global  → KF1: GPS+IMU EKF global estimate
@@ -312,6 +356,146 @@ public:
 
         RCLCPP_INFO(get_logger(),
             "=== BT Brain (StateHub) online. Waiting for sensors... ===");
+
+        // ── Bootstrap: pre-fill identity map→odom so the 30 Hz timer ────────
+        // starts broadcasting the moment bt_brain launches, before the first
+        // real bt_fused estimate arrives.
+        //
+        // WHY: navsat_transform needs map→base_footprint to initialise GPS→ENU.
+        // That chain is: map→odom (ours) + odom→base_footprint (ekf_local).
+        // Without this bootstrap there is a dead window between ekf_delay (8s)
+        // and the first BT tick with real data — navsat_transform errors out,
+        // /odometry/gps is never published, the global EKFs have no GPS input,
+        // gps_odom_ready stays false, CheckGpsSignal always fails, and
+        // update_map_to_odom_tf() never gets called → map→odom never appears
+        // → /tf stays completely silent for the whole run.
+        //
+        // The identity transform is correct at t=0 because the robot spawns
+        // at the same position in both the map frame and the odom frame.
+        // update_map_to_odom_tf() overwrites this with the GPS-corrected
+        // value as soon as the first real bt_fused position is computed.
+        //
+        // NOTE: stamp is left at 0 here — the 30 Hz wall timer calls
+        // ts.header.stamp = now() on every tick, so the first broadcast
+        // after the sim clock arrives will have a valid timestamp.
+        {
+            geometry_msgs::msg::TransformStamped bootstrap;
+            bootstrap.header.frame_id    = "map";
+            bootstrap.child_frame_id     = "odom";
+            bootstrap.transform.rotation.w = 1.0;  // identity quaternion
+            std::lock_guard<std::mutex> lk(state->mtx);
+            state->map_to_odom_cached = bootstrap;
+            state->map_to_odom_valid  = true;    // timer starts broadcasting now
+        }
+
+        // ── TF2 setup ─────────────────────────────────────────────────────
+        // TransformBroadcaster: pass *this (rclcpp::Node&), not this (raw ptr).
+        tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(*this);
+        tf_buffer_       = std::make_shared<tf2_ros::Buffer>(get_clock());
+        // TransformListener: pass 'this' (StateHub*) — the template deduces
+        // NodeT=StateHub* and calls node->get_node_X_interface() internally.
+        // Passing *this (reference) breaks '->' inside the template body.
+        // spin_thread=false: StateHub is already being spun externally.
+        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(
+            *tf_buffer_, this, false);
+
+        // Broadcast the cached map→odom at 30 Hz.
+        // update_map_to_odom_tf() populates the cache every time
+        // publish_bt_fused() fires (at the BT tick rate, ~10 Hz).
+        // Re-stamping every 33 ms keeps the TF buffer from expiring
+        // between BT ticks and gives downstream consumers a smooth 30 Hz edge.
+        tf_broadcast_timer_ = this->create_wall_timer(std::chrono::milliseconds(33),
+            [this]() {
+                // ── Edge 1: map → odom (from bt_fused estimate) ───────────────
+                geometry_msgs::msg::TransformStamped ts;
+                bool valid;
+                {
+                    std::lock_guard<std::mutex> lk(state->mtx);
+                    ts    = state->map_to_odom_cached;
+                    valid = state->map_to_odom_valid;
+                }
+                if (valid) {
+                    ts.header.stamp = now();   // refresh timestamp every tick
+                    tf_broadcaster_->sendTransform(ts);
+                }
+
+                // ── Edge 2: odom → base_footprint (from raw wheel odometry) ──
+                // bt_brain owns this edge as a reliable fallback.
+                // ekf_local should publish the same edge (fused with IMU), but
+                // if it is silent the TF chain map→odom→base_footprint must still
+                // exist so that navsat_transform, update_map_to_odom_tf(), and
+                // all TF consumers can function.
+                {
+                    std::lock_guard<std::mutex> lk(state->mtx);
+                    if (state->odom_ready) {
+                        geometry_msgs::msg::TransformStamped odom_tf;
+                        odom_tf.header.stamp    = now();
+                        odom_tf.header.frame_id = "odom";
+                        odom_tf.child_frame_id  = "base_footprint";
+                        odom_tf.transform.translation.x = state->odom_x;
+                        odom_tf.transform.translation.y = state->odom_y;
+                        odom_tf.transform.translation.z = 0.0;
+                        odom_tf.transform.rotation.z =
+                            std::sin(state->odom_yaw / 2.0);
+                        odom_tf.transform.rotation.w =
+                            std::cos(state->odom_yaw / 2.0);
+                        tf_broadcaster_->sendTransform(odom_tf);
+                    }
+                }
+            });
+    }
+
+    // ── TF2 ──────────────────────────────────────────────────────────────────
+    /**
+     * Compute and cache the map → odom TF edge from the bt_fused position.
+     *
+     * Math:
+     *   T_map_to_odom = T_map_to_base_fp × inv(T_odom_to_base_fp)
+     *
+     * T_map_to_base_fp  : bt_fused (x, y, yaw in map frame)
+     * T_odom_to_base_fp : looked up from TF buffer (published by ekf_local)
+     *
+     * Called from publish_bt_fused() on every BT tick that outputs a position.
+     */
+    void update_map_to_odom_tf(double bt_x, double bt_y, double yaw)
+    {
+        // ── Look up odom → base_footprint ─────────────────────────────────
+        geometry_msgs::msg::TransformStamped odom_to_base;
+        try {
+            odom_to_base = tf_buffer_->lookupTransform(
+                "odom", "base_footprint", tf2::TimePointZero);
+        } catch (const tf2::TransformException& ex) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 3000,
+                "[BT TF] Cannot lookup odom→base_footprint: %s  "
+                "(map→odom TF not updated this tick)", ex.what());
+            return;
+        }
+
+        // ── Build T_map_to_base_fp from bt_fused ──────────────────────────
+        tf2::Quaternion q;
+        q.setRPY(0.0, 0.0, yaw);
+        tf2::Transform T_map_base;
+        T_map_base.setOrigin(tf2::Vector3(bt_x, bt_y, 0.0));
+        T_map_base.setRotation(q);
+
+        // ── Build T_odom_to_base_fp from TF lookup ─────────────────────────
+        tf2::Transform T_odom_base;
+        tf2::fromMsg(odom_to_base.transform, T_odom_base);
+
+        // ── T_map_to_odom = T_map_base × inv(T_odom_base) ─────────────────
+        tf2::Transform T_map_odom = T_map_base * T_odom_base.inverse();
+
+        // ── Cache for the 30 Hz broadcaster timer ─────────────────────────
+        geometry_msgs::msg::TransformStamped ts;
+        ts.header.stamp    = now();
+        ts.header.frame_id = "map";
+        ts.child_frame_id  = "odom";
+        ts.transform       = tf2::toMsg(T_map_odom);
+
+        std::lock_guard<std::mutex> lk(state->mtx);
+        state->map_to_odom_cached = ts;
+        state->map_to_odom_valid  = true;
+        state->bt_fused_valid     = true;
     }
 
 private:
@@ -322,6 +506,12 @@ private:
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr      sub_kf1_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr      sub_kf2_;
     rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr    sub_ann_;
+
+    // ── TF2 members ───────────────────────────────────────────────────────
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::shared_ptr<tf2_ros::Buffer>               tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener>    tf_listener_;
+    rclcpp::TimerBase::SharedPtr                   tf_broadcast_timer_;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -338,10 +528,11 @@ static void publish_bt_fused(StateHub& hub, double x, double y)
     msg.pose.pose.position.y = y;
     msg.pose.pose.position.z = 0.0;
     // Orientation: copy from KF2 (most stable dead-reckoning source)
+    double yaw;
     {
         std::lock_guard<std::mutex> lk(hub.state->mtx);
         // Use yaw from odom as orientation proxy when KF2 quat isn't stored
-        double yaw = hub.state->odom_yaw;
+        yaw = hub.state->odom_yaw;
         msg.pose.pose.orientation.z = std::sin(yaw / 2.0);
         msg.pose.pose.orientation.w = std::cos(yaw / 2.0);
     }
@@ -353,6 +544,11 @@ static void publish_bt_fused(StateHub& hub, double x, double y)
         hub.state->final_x = x;
         hub.state->final_y = y;
     }
+
+    // ── Drive the map→odom TF edge from this bt_fused output ─────────────
+    // update_map_to_odom_tf() computes T_map_odom = T_map_base * inv(T_odom_base)
+    // and caches it for the 30 Hz broadcast timer inside StateHub.
+    hub.update_map_to_odom_tf(x, y, yaw);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

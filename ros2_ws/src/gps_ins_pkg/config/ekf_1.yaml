@@ -62,7 +62,13 @@ ekf_filter_node_gps_imu: # Global state estimation, it has discrete updates when
     frequency: 30.0
     sensor_timeout: 0.5
     two_d_mode: true
-    publish_tf: true # publish the transform from map to base_link, so we can visualize it in rviz and use it for navigation
+    # T1 FIX: bt_brain now owns the map→odom TF edge exclusively.
+    # With publish_tf: true here AND bt_brain broadcasting, two publishers
+    # competed for the same edge causing TF instability. Setting false
+    # delegates all map→odom authority to bt_brain's 30 Hz wall timer,
+    # which publishes the BT-fused (ANN+FLS) corrected transform instead
+    # of the raw GPS-only EKF correction.
+    publish_tf: false
     
     map_frame: map
     odom_frame: odom

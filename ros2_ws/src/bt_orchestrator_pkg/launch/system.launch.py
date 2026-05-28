@@ -38,7 +38,7 @@
 ║   use_sim_time    true/false  (default: true)                               ║
 ║   ekf_delay       seconds     (default: 8.0)                                ║
 ║   fusion_delay    seconds     (default: 12.0)                               ║
-║   bt_delay        seconds     (default: 15.0)                               ║
+║   bt_delay        seconds     (default: 9.0)                                ║
 ║   log_level       DEBUG/INFO/WARN  (default: INFO)                          ║
 ║                                                                              ║
 ║  USAGE                                                                      ║
@@ -119,9 +119,11 @@ def generate_launch_description() -> LaunchDescription:
 
         DeclareLaunchArgument(
             'bt_delay',
-            default_value='15.0',
-            description='Seconds to wait before starting the BT brain '
-                        '(allow the full localization stack to settle)'),
+            default_value='9.0',
+            description='Seconds to wait before starting the BT brain. '
+                        'Must be > ekf_delay (default 8 s) so ekf_local has '
+                        'time to publish odom→base_footprint before bt_brain '
+                        'bootstraps the map→odom TF for navsat_transform.'),
 
         DeclareLaunchArgument(
             'log_level',
@@ -384,7 +386,7 @@ def generate_launch_description() -> LaunchDescription:
         '║  Phase 1 │ t=0 s    Gazebo + Robot                             ║\n'
         '║  Phase 2 │ t=ekf_delay   (default 8s)   EKF stacks             ║\n'
         '║  Phase 3 │ t=fusion_delay (default 12s)  Fusion + ANN + Nav    ║\n'
-        '║  Phase 4 │ t=bt_delay   (default 15s)   BT Brain               ║\n'
+        '║  Phase 4 │ t=bt_delay   (default 9s)    BT Brain               ║\n'
         '║                                                                  ║\n'
         '║  Groot2: Connect on ZMQ port 1666 after Phase 4 starts          ║\n'
         '║  /odometry/bt_fused: authoritative position output              ║\n'
