@@ -56,6 +56,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    ExecuteProcess,
     GroupAction,
     IncludeLaunchDescription,
     LogInfo,
@@ -377,6 +378,31 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ═════════════════════════════════════════════════════════════════════════
+    #  T2 FIX — set Gazebo /clock publish rate to 100 Hz
+    # ═════════════════════════════════════════════════════════════════════════
+    # Root cause (confirmed via /proc/<pid>/cmdline):
+    #   gzserver.launch.py in Humble gazebo_ros_pkgs passes no --ros-args to
+    #   gzserver.  The /gazebo ROS node declares 'publish_rate' (confirmed via
+    #   ros2 param list) but the default of 10.0 Hz is never overridden at
+    #   startup.  Passing --ros-args directly to gzserver via ExecuteProcess
+    #   crashes it (Gazebo's own arg parser runs first and misinterprets the
+    #   trailing args as a state-log filename).
+    #
+    # Fix: after gzserver is up (~5 s), call 'ros2 param set /gazebo
+    # publish_rate 100.0'.  The gazebo_ros_init plugin registers a parameter
+    # callback that cancels the old 10 Hz timer and creates a 100 Hz one.
+    # Result: /clock → ~100 Hz → EKF sim-time timers unlock to 30 Hz.
+    set_clock_rate = TimerAction(
+        period=5.0,    # /gazebo node is reliably up by t=5 s
+        actions=[
+            ExecuteProcess(
+                cmd=['ros2', 'param', 'set', '/gazebo', 'publish_rate', '100.0'],
+                output='screen',
+            )
+        ]
+    )
+
+    # ═════════════════════════════════════════════════════════════════════════
     #  ASSEMBLE
     # ═════════════════════════════════════════════════════════════════════════
     startup_log = LogInfo(msg='\n\n'
@@ -399,6 +425,7 @@ def generate_launch_description() -> LaunchDescription:
             # ── Phase 1: Simulation (immediate) ──────────────────────────────
             phase1_log,
             simulation,
+            set_clock_rate,   # T2: set /gazebo publish_rate=100 Hz at t=5s
 
             # ── Phase 2: EKF stacks (delayed) ────────────────────────────────
             phase2,

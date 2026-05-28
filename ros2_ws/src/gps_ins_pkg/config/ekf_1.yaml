@@ -4,7 +4,10 @@ ekf_local: # it has continous state estimation
     frequency: 30.0
     sensor_timeout: 0.5
     two_d_mode: true
-    publish_tf: true # publish the transform from map to base_link, so we can visualize it in rviz and use it for navigation
+    publish_tf: true # publishes odom → base_footprint TF edge.
+    # NOTE: ekf_local silently fails to publish TF under use_sim_time:true
+    # in ROS2 Humble (known upstream bug). bt_brain compensates by
+    # re-publishing this edge from its /odom subscription callback (T1).
     
     map_frame: map
     odom_frame: odom

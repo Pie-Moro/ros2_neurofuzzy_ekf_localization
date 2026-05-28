@@ -9,17 +9,23 @@
     that same prefix.
 
     Sensors
-    ======
-    1. IMU        — libgazebo_ros_imu_sensor.so   → /imu/data
-    2. GPS        — libgazebo_ros_gps_sensor.so   → /gps/fix
+    =======
+    1. IMU        — libgazebo_ros_imu_sensor.so   → /imu/data  (100 Hz)
+    2. GPS        — libgazebo_ros_gps_sensor.so   → /gps/fix   (5 Hz)
 
     NOTE: The base_scan link in the URDF is kept only for its visual
     mesh (so the robot still looks correct). There is intentionally
     NO LiDAR sensor plugin — this project does not use a laser scanner.
 
     Actuator
-    ======-
-    3. Diff-drive — libgazebo_ros_diff_drive.so   → /cmd_vel, /odom
+    ========
+    3. Diff-drive — libgazebo_ros_diff_drive.so   → /cmd_vel, /odom  (30 Hz)
+
+    TF NOTE: publish_odom_tf = FALSE.
+    bt_brain owns the odom → base_footprint TF edge (T1). It publishes
+    this transform from the /odom subscription callback at ~50 Hz wall-
+    clock rate. The diff-drive plugin must NOT also publish this edge or
+    two nodes would compete for the same TF transform.
   -->
 
   <!-- ═══════════════════════════════════════════════
@@ -85,15 +91,11 @@
 
   <!-- ═══════════════════════════════════════════════
        3.  Differential Drive  (30 Hz)
-       Fixes vs. original:
-         - left/right joint names use ${namespace} so
-           the plugin finds the joints in any namespace.
-         - robot_base_frame uses ${namespace}.
-         - publish_odom_tf = true so the odom → base_footprint
-           TF is published  and the package works standalone.
-           Switch to false if/when you add an EKF node
-           (e.g. robot_localization) that will own that
-           edge of the TF tree.
+       publish_odom_tf = FALSE: bt_brain (T1) owns the
+       odom → base_footprint TF edge via its /odom
+       subscription callback. Two publishers on the
+       same TF edge cause instability — plugin must not
+       publish it.
   ═══════════════════════════════════════════════════ -->
   <gazebo>
     <plugin name="tb3_diff_drive" filename="libgazebo_ros_diff_drive.so">

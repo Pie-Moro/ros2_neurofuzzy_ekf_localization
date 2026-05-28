@@ -359,6 +359,24 @@ private:
     }
 
     // ── Debounced GPS state machine ───────────────────────────────────────────
+    // ── Debounced GPS state machine ───────────────────────────────────────────
+    //
+    // OUTDOOR → INDOOR : critical score OR consec_bad_ >= debounce_in_ticks.
+    //                    No geofence interaction — GPS can always force INDOOR.
+    //
+    // INDOOR → OUTDOOR : consec_good_ >= debounce_out_ticks AND geofence agrees.
+    //
+    //   GEOFENCE VETO (the fix for rapid oscillation):
+    //   When use_geofence=true, GPS-score is NOT allowed to declare OUTDOOR
+    //   while the robot is still inside the hysteresis-expanded AABB.
+    //   Without this veto the pattern was:
+    //     GPS: 4 good ticks → flip OUTDOOR (every ~0.8 s at 5 Hz)
+    //     Geofence /odom cb: robot still inside box → flip INDOOR immediately
+    //     → 1 Hz oscillation visible in log and bt_fused output
+    //   With the veto: GPS consec_good_ is reset, state stays INDOOR, no flip.
+    //   OUTDOOR is declared only when BOTH signals agree (robot has left the box).
+    //
+    // Called under mtx_ from on_fix() and evaluate_timeout().
     void update_gps_state(bool bad_tick, bool critical)
     {
         Environment cur = env_.load();
@@ -376,6 +394,33 @@ private:
             }
         } else {
             if (consec_good_ >= cfg_.debounce_out_ticks) {
+
+                // ── GEOFENCE VETO ────────────────────────────────────────────
+                // If the geofence is enabled and the robot is still physically
+                // inside the building (outer AABB incl. hysteresis band),
+                // GPS-score is not allowed to flip to OUTDOOR.
+                // Reset consec_good_ so the counter must re-accumulate,
+                // preventing a constant stream of vetoed transitions.
+                if (cfg_.use_geofence && has_odom_) {
+                    double wx = odom_x_ + cfg_.spawn_world_x;
+                    double wy = odom_y_ + cfg_.spawn_world_y;
+                    double h  = cfg_.hysteresis_m;
+                    bool still_inside = in_box(wx, wy,
+                        cfg_.building_x_min_world - h,
+                        cfg_.building_x_max_world + h,
+                        cfg_.building_y_min_world - h,
+                        cfg_.building_y_max_world + h);
+                    if (still_inside) {
+                        RCLCPP_INFO_THROTTLE(node_->get_logger(),
+                            *node_->get_clock(), 5000,
+                            "[IndoorDetector] GPS-score OUTDOOR vetoed by geofence"
+                            "  world=(%.2f, %.2f)  good_ticks=%d",
+                            wx, wy, consec_good_);
+                        consec_good_ = 0;   // must re-accumulate
+                        return;
+                    }
+                }
+                // ── Both paths agree: flip to OUTDOOR ────────────────────────
                 RCLCPP_INFO(node_->get_logger(),
                     "[IndoorDetector] ● GPS-score → OUTDOOR  "
                     "good_ticks=%d", consec_good_);

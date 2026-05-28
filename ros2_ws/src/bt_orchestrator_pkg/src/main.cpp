@@ -65,7 +65,7 @@
 // ── Package path resolution ────────────────────────────────────────────────────
 #include "ament_index_cpp/get_package_share_directory.hpp"
 
-// u2500u2500 Indoor / Outdoor environment classifier u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500u2500
+
 #include "bt_orchestrator_pkg/indoor_detector.hpp"
 
 // ── TF2 ──────────────────────────────────────────────────────────────────────
