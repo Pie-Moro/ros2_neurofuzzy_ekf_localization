@@ -19,10 +19,10 @@
 ║                     │  • ekf_filter_gps_enc  /odometry/global2(KF2-global) ║
 ║                     │  • navsat_transform2   /odometry/gps                  ║
 ║                                                                              ║
-║  t = fusion_delay   PHASE 3 │ Fusion & Intelligence                         ║
+║  t = fusion_delay   PHASE 3 │ Fusion & Intelligence (S15: P2 Eq. 5 ANN+FLS)     ║
 ║      (default 12 s) │  • complementary_filter  /odometry/fused              ║
 ║                     │  • trajectory_nn_node    /ann/trajectory              ║
-║                     │  • trajectory_controller /cmd_vel                     ║
+║                     │  • trajectory_controller /cmd_vel (now uses /odometry/bt_fused)║
 ║                                                                              ║
 ║  t = bt_delay       PHASE 4 │ BT Orchestrator                               ║
 ║      (default 15 s) │  • bt_brain  /odometry/bt_fused                      ║
@@ -284,12 +284,18 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ── ANN Online Training Node ──────────────────────────────────────────────
-    # Subscribes : /imu/data  /odometry/gps  /odom
+    # Subscribes : /imu/data  /odom
     #              /odometry/global (KF1)  /odometry/global2 (KF2)
-    #              /odometry/fused (training target)
+    #              /odometry/fused (training target)  /gps/fix (training gate)
+    # NOTE: /odometry/gps was REMOVED from ANN inputs in B1 (Session 8).
+    #   GPS was blocking ALL inference indoors (missing_sensors fired every tick).
+    #   Paper Eq.(3) explicitly forbids GPS as ANN input.
     # Publishes  : /ann/trajectory  /ann/target_vis
-    # Trains     : every 5 s in background thread (≥500 samples needed)
+    # Trains     : every 5 s in background thread (≥500 clean samples needed)
+    #              EKF validity guard (S11): rejects samples when KF1 P_xx > 5.0 m²
+
     ann_node = Node(
+
         package='robot_control_brain',
         executable='trajectory_nn_node',
         name='online_training_node',
@@ -299,17 +305,25 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ── Trajectory Controller ─────────────────────────────────────────────────
-    # FIX 4: Remapped feedback from raw /odom → /odometry/global (EKF1 output).
-    # Raw wheel odometry drifts freely in the odom frame.  The controller was
-    # therefore computing waypoint errors in a frame that diverged from the map
-    # frame over time, causing the robot to navigate to the wrong world positions.
-    # /odometry/global is GPS+IMU corrected and lives in the map frame, so
-    # waypoint coordinates (which are map-frame targets) are now consistent with
-    # the robot's actual position estimate.
+    # S15 FIX (T5): Switched from /odometry/global → /odometry/bt_fused
     #
-    # NOTE: ekf_local (EKF1) starts at ekf_delay (default 8s), before this node
-    # at fusion_delay (default 12s), so /odometry/global is guaranteed to be
-    # publishing before the controller needs it.
+    # ROOT CAUSE (Sessions 8–14):
+    #   GPS ENU offset (dx_gps) varies run-to-run with unpredictable sign:
+    #     S14 Run 1: dx_gps = −0.285 m  (westward drift)
+    #     S14 Run 2: dx_gps = +0.515 m  (eastward drift, sign-flipped)
+    #   No fixed waypoint x can compensate. /odometry/global carries GPS bias
+    #   directly; when |dx_gps| > 0.536 m, robot overshoots south door gap.
+    #
+    # PAPER-ALIGNED FIX (P2 Eq. 5 — Yousuf & Kadri 2020):
+    #   /odometry/bt_fused = α₁_fuzzy(ANN_pred) + α₂_fuzzy(KF2_anchored)
+    #   ├─ Outdoors: high α₂ → KF2 (trusted GPS+Odom)
+    #   ├─ Indoors:  high α₁ → ANN (trained pseudo-sensor)
+    #   └─ Transitions: smooth fuzzy blending (no jumps)
+    #
+    # RESULT: Eliminates GPS bias artifacts; seamless indoor/outdoor navigation.
+    #
+    # NOTE: bt_brain publishes /odometry/bt_fused at 30 Hz (available at bt_delay).
+    # Controller tick: 10 Hz (sufficient for 30 Hz state lag tolerance).
     trajectory_controller = Node(
         package='control_pkg',
         executable='trajectory_controller',

@@ -5,3 +5,6 @@ log/
 
 # IDEs and Editors
 .vscode/
+
+# Ignore all ROS2 bag files
+*.db3

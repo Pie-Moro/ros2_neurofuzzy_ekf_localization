@@ -1,3 +1,22 @@
+"""
+Complementary Filter Node — Fixed (B7)
+=======================================
+
+Implements paper [P2] Eq. (2):
+  [x_kf_c, y_kf_c] = α1·[x_kf1, y_kf1] + α2·[x_kf2, y_kf2]
+
+Fixed α1=α2=0.5 (equal weighting of KF-1 GPS+IMU and KF-2 GPS+Odom).
+
+Output /odometry/fused is the training target for the ANN (paper Eq. 3).
+
+BUG FIXED:
+  [B7] child_frame_id was 'base_link' — all other nodes in this system use
+       'base_footprint'. TF consumers that expect 'base_footprint' as the child
+       frame of odometry messages (e.g. robot_localization's ekf_node when
+       checking frame consistency) would silently ignore messages with the
+       wrong child_frame_id.
+"""
+
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
@@ -8,79 +27,65 @@ class ComplementaryFilter(Node):
     def __init__(self):
         super().__init__('complementary_filter_node')
 
-        # PESI FISSI (non più parametri ROS)
-        self.alpha1 = 0.5  # Peso EKF-1
-        self.alpha2 = 0.5  # Peso EKF-2
+        # Fixed blending weights (paper §3.1, Eq. 2: α1+α2=1)
+        self.alpha1 = 0.5   # Weight for KF-1 (GPS+IMU)
+        self.alpha2 = 0.5   # Weight for KF-2 (GPS+Odom)
 
-        # SOTTOSCRIZIONI
-        self.sub_ekf1 = message_filters.Subscriber(
-            self,
-            Odometry,
-            '/odometry/global'
-        )  # EKF GPS-IMU
+        # Subscriptions via ApproximateTimeSynchronizer
+        self.sub_ekf1 = message_filters.Subscriber(self, Odometry, '/odometry/global')
+        self.sub_ekf2 = message_filters.Subscriber(self, Odometry, '/odometry/global2')
 
-        self.sub_ekf2 = message_filters.Subscriber(
-            self,
-            Odometry,
-            '/odometry/global2'
-        )  # EKF GPS-odometry
-
-        # SINCRONIZZAZIONE
         self.ts = message_filters.ApproximateTimeSynchronizer(
             [self.sub_ekf1, self.sub_ekf2],
             queue_size=10,
-            slop=0.2
+            slop=0.2,
         )
         self.ts.registerCallback(self.fusion_callback)
 
-        # PUBLISHER
-        self.odom_pub = self.create_publisher(
-            Odometry,
-            '/odometry/fused',
-            10
-        )
+        # Output: [x_kf_c, y_kf_c] = training target for ANN (paper Eq. 3)
+        self.odom_pub = self.create_publisher(Odometry, '/odometry/fused', 10)
 
         self.get_logger().info(
-            "Complementary Filter Node avviato con alpha fissi."
-        )
+            '[ComplementaryFilter] Started. α1=0.5 (KF1) α2=0.5 (KF2)\n'
+            '  In : /odometry/global  /odometry/global2\n'
+            '  Out: /odometry/fused   (ANN training target, paper Eq.2)')
 
-    def fusion_callback(self, msg1, msg2):
+    def fusion_callback(self, msg1: Odometry, msg2: Odometry) -> None:
+        """
+        Fuse KF-1 and KF-2 position estimates.
+        Paper Eq. (2): [x_kf_c, y_kf_c] = α1·[x_kf1,y_kf1] + α2·[x_kf2,y_kf2]
+        """
+        fused_x = self.alpha1 * msg1.pose.pose.position.x + \
+                  self.alpha2 * msg2.pose.pose.position.x
+        fused_y = self.alpha1 * msg1.pose.pose.position.y + \
+                  self.alpha2 * msg2.pose.pose.position.y
 
-        # FUSIONE POSIZIONE
-        fused_x = (self.alpha1 * msg1.pose.pose.position.x) + \
-                   (self.alpha2 * msg2.pose.pose.position.x)
+        # Orientation: take from dominant weight source (here α1=α2, so use msg1)
+        main_msg = msg1 if self.alpha1 >= self.alpha2 else msg2
 
-        fused_y = (self.alpha1 * msg1.pose.pose.position.y) + \
-                   (self.alpha2 * msg2.pose.pose.position.y)
+        out = Odometry()
+        out.header.stamp    = msg1.header.stamp
+        out.header.frame_id = 'map'
+        out.child_frame_id  = 'base_footprint'  # [B7 FIX] was 'base_link'
 
-        # Scelta del messaggio dominante per Z e orientamento
-        main_msg = msg2 if self.alpha2 > self.alpha1 else msg1
+        out.pose.pose.position.x  = fused_x
+        out.pose.pose.position.y  = fused_y
+        out.pose.pose.position.z  = main_msg.pose.pose.position.z
+        out.pose.pose.orientation = main_msg.pose.pose.orientation
 
-        fused_z = main_msg.pose.pose.position.z
-        fused_quat = main_msg.pose.pose.orientation
+        # Velocity: copy from dominant source for FLS slip-error computation
+        out.twist.twist = main_msg.twist.twist
 
-        # CREAZIONE OUTPUT
-        fused_odom = Odometry()
+        # Covariance: copy from dominant source
+        out.pose.covariance  = main_msg.pose.covariance
+        out.twist.covariance = main_msg.twist.covariance
 
-        fused_odom.header.stamp = msg1.header.stamp
-        fused_odom.header.frame_id = 'map'
-        fused_odom.child_frame_id = 'base_link'
-
-        fused_odom.pose.pose.position.x = fused_x
-        fused_odom.pose.pose.position.y = fused_y
-        fused_odom.pose.pose.position.z = fused_z
-        fused_odom.pose.pose.orientation = fused_quat
-
-        # Copia covarianza dal messaggio principale
-        fused_odom.pose.covariance = main_msg.pose.covariance
-
-        self.odom_pub.publish(fused_odom)
+        self.odom_pub.publish(out)
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = ComplementaryFilter()
-
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -89,6 +94,7 @@ def main(args=None):
         if rclpy.ok():
             node.destroy_node()
             rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

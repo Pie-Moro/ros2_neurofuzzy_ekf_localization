@@ -125,37 +125,49 @@ public:
         //    south_inner =  -4.0740 m     north_inner =  +4.4669 m
         //    Interior cavity: 21.9052 m (E-W) × 8.5409 m (N-S)
         //
-        //  AABB = inner face + 0.20 m safety inset (absorbs GPS noise ≈ 0.32 m std):
-        double building_x_min_world = -10.58;  // west  inner face (-10.7814) + 0.20 m
-        double building_x_max_world = +10.92;  // east  inner face (+11.1238) - 0.20 m
-        double building_y_min_world =  -3.87;  // south inner face ( -4.0740) + 0.20 m
-        double building_y_max_world =  +4.27;  // north inner face ( +4.4669) - 0.20 m
+        //  AABB derived from SDF world file exact wall face parsing:
+        //    South inner face: y = -4.074  (Wall_22/27/24)
+        //    North inner face: y = +4.467  (Wall_9/14/16)
+        //    West  inner face: x = -10.781 (Wall_18/21)
+        //    East  inner face: x = +11.124 (Wall_13/25)
+        //
+        // GEOFENCE SOURCE: /odom (reverted from /odometry/global).
+        //
+        // Why /odom and NOT /odometry/global for the GEOFENCE:
+        //   /odom (wheel encoder dead-reckoning) has consistent drift ~0.2m/100m
+        //   — small and predictable. It accurately tracks the robot's PHYSICAL
+        //   position relative to its start.
+        //
+        //   /odometry/global (GPS+IMU EKF) has GPS multipath bias that varies
+        //   run-to-run: measured 0.057m in run 1 but 0.439m in run 2.
+        //   In run 2, the Δy=+0.343m bias made /odometry/global think the robot
+        //   was 0.343m NORTH of its physical position. The GEOFENCE fired at
+        //   t+554s when global y=-3.925 looked inside the box, but /odom said
+        //   y=-4.295 — the robot was still OUTSIDE the building physically.
+        //   GPS was disabled, EKF dead-reckoned from the wrong starting point,
+        //   and the robot drove into the south wall.
+        //
+        //   For a binary inside/outside gate decision, physical accuracy
+        //   matters more than GPS-corrected accuracy. /odom wins here.
+        //
+        // South boundary set to -4.00 (was -3.97):
+        //   Physical south wall inner face = -4.074m.
+        //   At /odom y=-4.00 the robot is 0.074m inside the physical wall.
+        //   /odom drift at building entry is typically <0.25m after 100-200m
+        //   outdoor travel → robot is truly inside when geofence fires.
+        //   Extra 0.03m margin vs previous -3.97 absorbs /odom drift
+        //   without risking premature GPS-disable outside the building.
+        double building_x_min_world = -10.68;  // west:  -10.781 + 0.10
+        double building_x_max_world = +11.02;  // east:  +11.124 - 0.10
+        double building_y_min_world =  -4.00;  // south: -4.074 + 0.07 (REVERTED+TIGHTENED)
+        double building_y_max_world =  +4.37;  // north: +4.467 - 0.10
 
-        // FIX: spawn offset must be ZERO.
-        //
-        // The /odom topic published by Gazebo's diff_drive plugin is initialised
-        // at the robot's world-frame spawn pose, so odom (x, y) == world (x, y).
-        // The original non-zero values (5.0, 6.5) double-counted the spawn offset:
-        //
-        //   det_world = odom + (5, 6.5) = world + (5, 6.5)   ← WRONG (2× shift)
-        //
-        // Effect of the bug:
-        //   • Robot at world (1.14, −10.14) — 6 m south of the building — was
-        //     reported as det_world (6.15, −3.65), which lies inside the AABB
-        //     → false INDOOR → BT forced to NO_GPS branch ("GPS outage").
-        //   • Robot actually inside building (world Y ≈ 0.93) was reported as
-        //     det_world (X, 7.43), which lies north of the AABB Y_max → missed
-        //     INDOOR detection while the robot was traversing the building.
-        //
-        // With spawn = (0, 0):
-        //   det_world = odom = world   ← correct
-        double spawn_world_x       = 0.0;   // /odom is already world frame
-        double spawn_world_y       = 0.0;   // /odom is already world frame
+        // Geofence uses /odom — spawn offset = 0.0 since /odom already
+        // starts at world spawn position (5.0, 6.5) from Gazebo diff_drive.
+        double spawn_world_x       = 0.0;
+        double spawn_world_y       = 0.0;
 
-        // Wall margin already baked into the AABB above.
-        // hysteresis_m: extra clearance the robot must travel PAST the inner
-        // boundary before OUTDOOR is declared (prevents wall oscillation).
-        double hysteresis_m        = 0.10;
+        double hysteresis_m        = 0.20;
 
         // ── GPS QUALITY SCORING (secondary path / real hardware) ─────────────
         // Covariance [m²] – guard removed; always evaluated (fixes Gazebo bug)
@@ -442,7 +454,18 @@ private:
     //  SUBSCRIBER CALLBACKS
     // =========================================================================
 
-    /** /odom  –  PRIMARY geofence source (fires ~50 Hz, near ground-truth in sim) */
+    /** /odom — PRIMARY geofence source (wheel encoder dead-reckoning, world frame)
+     *
+     * REVERTED from /odometry/global back to /odom.
+     * Reason: /odometry/global GPS multipath bias varies run-to-run (up to 0.44m),
+     * causing premature GEOFENCE fire when GPS bias was northward — robot was
+     * physically outside the building when GPS was disabled, baking a 0.37m
+     * northward error into indoor dead-reckoning and driving the robot into
+     * the south wall. /odom drift is <0.2m per 100m (consistent, predictable)
+     * and accurately reflects physical position for the geofence gate decision.
+     *
+     * Rate: ~50 Hz (Gazebo diff_drive plugin).
+     */
     void on_odom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
     {
         std::lock_guard<std::mutex> lk(mtx_);

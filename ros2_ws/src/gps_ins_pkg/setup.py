@@ -27,8 +27,8 @@ setup(
         ],
     },
     entry_points={
-        'console_scripts': [
-            'complementary_filter = gps_ins_pkg.complementary_filter:main',
-        ],
-    },
+    'console_scripts': [
+        'complementary_filter = gps_ins_pkg.complementary_filter:main',
+    ],
+},
 )

@@ -1254,12 +1254,35 @@ int main(int argc, char** argv)
     auto indoor_flag = std::make_shared<std::atomic<bool>>(false);
 
     IndoorDetector::Config id_cfg;
-    // Uncomment and adjust any threshold for your environment:
-    // id_cfg.cov_bad_m2              = 25.0;   // 5 m std → poor fix
-    // id_cfg.jump_severe_m           = 5.0;    // sudden 5 m jump
-    // id_cfg.signal_timeout_s        = 2.0;    // 2 s without GPS → indoor
-    // id_cfg.debounce_indoor_ticks   = 5;      // 5 bad ticks to declare indoor
-    // id_cfg.debounce_outdoor_ticks  = 10;     // 10 good ticks to recover
+
+    // ── Fix A: GPS multipath debounce hardening ──────────────────────────────
+    // The building south wall creates GPS multipath starting ~2m before entry.
+    // At GPS 5 Hz, debounce_in_ticks=2 fires INDOOR after only 0.4 s of
+    // degraded signal — far too sensitive for a building approach in simulation.
+    // 4 ticks = 0.8 s of sustained bad GPS required before declaring INDOOR.
+    // debounce_out_ticks raised proportionally to prevent rapid oscillation
+    // when the robot lingers near the wall boundary.
+    id_cfg.debounce_in_ticks  = 4;    // was 2  → 0.8 s bad GPS to declare INDOOR
+    id_cfg.debounce_out_ticks = 8;    // was 4  → 1.6 s good GPS to declare OUTDOOR
+
+    // ── Fix B: GPS position divergence thresholds ────────────────────────────
+    // /odometry/global vs /odom legitimately diverges 1.0–1.5 m near the
+    // building due to GPS multipath pulling the EKF while /odom is accurate.
+    // The old warn threshold (1.0 m) fired on normal outdoor approach, adding
+    // +1 to every GPS tick score and compounding with the jump score to reach
+    // score_indoor_thr=3 while the robot was still 10–15 m from the door.
+    id_cfg.pos_div_warn_m = 1.5;   // was 1.0 m
+    id_cfg.pos_div_bad_m  = 4.0;   // was 3.0 m
+
+    // ── Fix C: GPS jump threshold ────────────────────────────────────────────
+    // GPS at σ=0.3162 m produces consecutive-message jumps of 0.4–0.9 m from
+    // noise alone (5 Hz × 0.316 m std ≈ 0.5 m per step). The old minor jump
+    // threshold (0.5 m) scored +1 on almost every outdoor GPS message, meaning
+    // the score was never 0 even in open sky. Raise to 1.0 m so only genuine
+    // multipath jumps (>3σ) contribute to the score.
+    id_cfg.jump_minor_m    = 1.0;   // was 0.5 m  (was below 3σ GPS noise floor)
+    id_cfg.jump_moderate_m = 2.5;   // was 2.0 m
+    id_cfg.jump_severe_m   = 6.0;   // was 5.0 m
 
     auto indoor_detector = std::make_shared<IndoorDetector>(
         hub.get(), indoor_flag, id_cfg);
