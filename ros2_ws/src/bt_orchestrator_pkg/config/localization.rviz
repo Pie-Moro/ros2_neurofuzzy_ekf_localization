@@ -1,0 +1,447 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 78
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /bt_fused [GOLD — AUTHORITATIVE]1
+        - /bt_fused [GOLD — AUTHORITATIVE]1/Covariance1
+        - /KF1 global [BLUE] GPS+IMU1
+        - /KF2 global [GREEN] GPS+Enc1
+      Splitter Ratio: 0.5
+    Tree Height: 600
+  - Class: rviz_common/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+  - Class: rviz_common/Tool Properties
+    Expanded: []
+    Name: Tool Properties
+  - Class: rviz_common/Selection
+    Name: Selection
+
+Visualization Manager:
+  Class: ""
+  Displays:
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SCENE SETUP
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 100; 100; 100
+      Enabled: true
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Name: Grid 1m
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Plane: XY
+      Plane Cell Count: 30
+      Reference Frame: map
+      Value: true
+
+    - Alpha: 0.15
+      Cell Size: 5
+      Class: rviz_default_plugins/Grid
+      Color: 80; 80; 80
+      Enabled: true
+      Line Style:
+        Line Width: 0.05
+        Value: Lines
+      Name: Grid 5m major
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Plane: XY
+      Plane Cell Count: 6
+      Reference Frame: map
+      Value: true
+
+    - Class: rviz_default_plugins/RobotModel
+      Description Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot_description
+      Enabled: true
+      Name: RobotModel
+      TF Prefix: ""
+      Transform Timeout: 0
+      Update Interval: 0
+      Value: true
+      Visual Enabled: true
+      Collision Enabled: false
+      Links:
+        All Links Enabled: true
+        Expand Joint Details: false
+        Expand Link Details: false
+        Expand Tree: false
+        Link Tree Style: Links in Alphabetic Order
+
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 15
+      Frames:
+        All Enabled: true
+      Marker Scale: 0.4
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Tree:
+        {}
+      Update Interval: 0
+      Value: true
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TIER-1  /odometry/bt_fused  — AUTHORITATIVE POSE OUTPUT
+    # Publisher: bt_brain (BT defuzzifier, P2 Eq.5)
+    # Large gold arrows + position covariance ellipse + 500-pose trail
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - Class: rviz_default_plugins/Odometry
+      Color: 255; 215; 0
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 255; 255; 127
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: true
+        Position:
+          Alpha: 0.30
+          Color: 255; 215; 0
+          Scale: 1
+          Value: true
+        Value: true
+      Enabled: true
+      Keep: 500
+      Name: "bt_fused [GOLD — AUTHORITATIVE]"
+      Shape: Arrow
+      Shaft Length: 0.30
+      Shaft Radius: 0.04
+      Head Length: 0.14
+      Head Radius: 0.07
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /odometry/bt_fused
+      Value: true
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TIER-2  /odometry/global  — KF1 global (GPS + IMU EKF)
+    # Publisher: ekf_filter_node_gps_imu  |  Q_xy=0.05, smooth_lagged
+    # Blue arrows + position covariance; shows GPS-ENU offset run-to-run
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - Class: rviz_default_plugins/Odometry
+      Color: 0; 100; 255
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 127; 180; 255
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: false
+        Position:
+          Alpha: 0.20
+          Color: 0; 100; 255
+          Scale: 1
+          Value: true
+        Value: true
+      Enabled: true
+      Keep: 200
+      Name: "KF1 global [BLUE] GPS+IMU"
+      Shape: Arrow
+      Shaft Length: 0.22
+      Shaft Radius: 0.030
+      Head Length: 0.11
+      Head Radius: 0.055
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /odometry/global
+      Value: true
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TIER-2  /odometry/global2  — KF2 global (GPS + Wheel Encoder EKF)
+    # Publisher: ekf_filter_node_gps_enc  |  S13 fix: Q=0.05, yaw=false
+    # Green arrows; compare against KF1 to verify P_xx < 0.22 m² (S14 bound)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - Class: rviz_default_plugins/Odometry
+      Color: 0; 200; 80
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 127; 255; 180
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: false
+        Position:
+          Alpha: 0.20
+          Color: 0; 200; 80
+          Scale: 1
+          Value: true
+        Value: true
+      Enabled: true
+      Keep: 200
+      Name: "KF2 global [GREEN] GPS+Enc"
+      Shape: Arrow
+      Shaft Length: 0.22
+      Shaft Radius: 0.030
+      Head Length: 0.11
+      Head Radius: 0.055
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /odometry/global2
+      Value: true
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TIER-3  /odometry/gps  — navsat_transform output
+    # Raw GPS-to-ENU converted odometry. Shows the run-to-run dx_gps offset
+    # (observed: −0.266m to +0.515m). RED arrows; position covariance only.
+    # Compare with bt_fused gold trail to visualise ANN GPS-bias correction.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - Class: rviz_default_plugins/Odometry
+      Color: 255; 60; 60
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 255; 180; 180
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: false
+        Position:
+          Alpha: 0.20
+          Color: 255; 60; 60
+          Scale: 1
+          Value: true
+        Value: true
+      Enabled: true
+      Keep: 100
+      Name: "GPS odom [RED] navsat_transform"
+      Shape: Arrow
+      Shaft Length: 0.16
+      Shaft Radius: 0.022
+      Head Length: 0.09
+      Head Radius: 0.045
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /odometry/gps
+      Value: true
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TIER-3  /odometry/fused  — complementary_filter output
+    # ANN training target (KF1+KF2 complementary blend).
+    # Orange; disabled by default — enable only when debugging ANN training.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - Class: rviz_default_plugins/Odometry
+      Color: 255; 140; 0
+      Covariance:
+        Value: false
+      Enabled: false
+      Keep: 100
+      Name: "comp_fused [ORANGE] ANN target"
+      Shape: Arrow
+      Shaft Length: 0.16
+      Shaft Radius: 0.022
+      Head Length: 0.09
+      Head Radius: 0.045
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /odometry/fused
+      Value: false
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TIER-4  /odom  — raw Gazebo diff_drive odometry
+    # Origin: (0,0) at spawn; Gazebo world (5.0, 6.5).
+    # Gray; disabled by default. Enable to verify GEOFENCE logic which reads
+    # /odom directly (IndoorDetector) — south wall fires at /odom y = −4.00.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - Class: rviz_default_plugins/Odometry
+      Color: 140; 140; 140
+      Covariance:
+        Value: false
+      Enabled: false
+      Keep: 100
+      Name: "/odom [GRAY] raw diff_drive"
+      Shape: Arrow
+      Shaft Length: 0.14
+      Shaft Radius: 0.018
+      Head Length: 0.08
+      Head Radius: 0.04
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /odom
+      Value: false
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # ANN TRAJECTORY POINT MARKER
+    # Source: /ann/viz_marker (PointStamped relay from ann_marker_relay node)
+    # geometry_msgs/Point has no frame — relay wraps it in map frame Marker.
+    # Magenta sphere at ANN-predicted position. Shows indoor jump oscillations.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: "ANN point [MAGENTA]"
+      Namespaces:
+        ann_pose: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /ann/viz_marker
+      Value: true
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # IMU VISUALIZER  — disabled by default (100 Hz → high RViz load)
+    # Enable only for sensor validation passes.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - Class: rviz_default_plugins/Imu
+      Acc Color: 255; 60; 60
+      Acc Deque Size: 1
+      Acc Scale: 0.008
+      Ang Vel Color: 0; 220; 0
+      Ang Vel Deque Size: 1
+      Ang Vel Scale: 0.4
+      Enabled: false
+      Fixed Frame Orientation: true
+      Force Arrow Scale: 0.01
+      Frame Locked: false
+      Mag Color: 0; 60; 255
+      Mag Deque Size: 1
+      Mag Scale: 0.01
+      Name: IMU
+      Show Acc: false
+      Show Ang Vel: true
+      Show Axes: true
+      Show Mag: false
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /imu/data
+      Value: false
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # MAP ORIGIN AXES — marks (0,0) in map frame = Gazebo world origin
+    # ─────────────────────────────────────────────────────────────────────────
+
+    - Class: rviz_default_plugins/Axes
+      Enabled: true
+      Length: 0.6
+      Name: "Map origin [0,0]"
+      Radius: 0.025
+      Reference Frame: map
+      Value: true
+
+  Enabled: true
+  Global Options:
+    Background Color: 30; 30; 35
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 255; 215; 0
+    - Class: rviz_default_plugins/PublishPoint
+      Single click: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /clicked_point
+  Value: true
+  Views:
+    Current:
+      # TopDownOrtho centred on building area.
+      # Map frame = Gazebo world. Building spans x∈[-10.78,+11.12], y∈[-4.07,+4.47].
+      # Spawn = (5.0, 6.5) → outdoor area. Scale≈55 fits ~25m in ~1400px panel.
+      Class: rviz_default_plugins/TopDownOrtho
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.06
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.01
+      Scale: 55
+      Target Frame: map
+      Value: TopDownOrtho (rviz_default_plugins)
+      X: 0.0
+      Y: 0.0
+    Saved: ~
+
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Hide Left Dock: false
+  Hide Right Dock: false
+  Selection:
+    collapsed: false
+  Tool Properties:
+    collapsed: false
+  Views:
+    collapsed: false
+  Width: 1400
+  X: 0
+  Y: 27

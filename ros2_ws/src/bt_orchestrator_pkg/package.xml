@@ -27,6 +27,7 @@
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>
+  <depend>visualization_msgs</depend>  <!-- NEW: ANN trajectory Marker in bt_brain -->
 
   <!-- Package share path resolution -->
   <depend>ament_index_cpp</depend>

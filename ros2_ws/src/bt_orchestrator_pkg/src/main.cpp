@@ -32,9 +32,11 @@
  *
  *  PUBLISHED TOPICS
  *  ─────────────────
- *    /odometry/bt_fused    nav_msgs/Odometry       BT final position estimate
+ *    /odometry/bt_fused    nav_msgs/Odometry           BT final position estimate
  *    /bt/fuzzy_weights     std_msgs/Float32MultiArray  [α1, α2, slip_error]
- *    /bt/status            std_msgs/String         active branch label
+ *    /bt/status            std_msgs/String             active branch label
+ *    /ann/viz_marker       visualization_msgs/Marker   ANN point (map frame, RViz)
+ *    /joint_states         sensor_msgs/JointState      wheel angles → RSP TF edges
  * ============================================================================
  */
 
@@ -57,10 +59,12 @@
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "visualization_msgs/msg/marker.hpp"
+#include "sensor_msgs/msg/joint_state.hpp"   // wheel TF fix — published at 30 Hz to feed RSP
 
-// ── BehaviorTree CPP v3 ───────────────────────────────────────────────────────
-#include "behaviortree_cpp_v3/bt_factory.h"
-#include "behaviortree_cpp_v3/loggers/bt_zmq_publisher.h"
+// ── BehaviorTree CPP v4 ───────────────────────────────────────────────────────
+#include "behaviortree_cpp/bt_factory.h"
+#include "behaviortree_cpp/loggers/groot2_publisher.h"
 
 // ── Package path resolution ────────────────────────────────────────────────────
 #include "ament_index_cpp/get_package_share_directory.hpp"
@@ -342,6 +346,27 @@ public:
                 state->ann_y    = msg->y;
                 state->ann_ready = true;
                 state->ann_ts   = now().seconds();
+
+                // ── Publish RViz Marker (map frame, magenta sphere) ───────────
+                // geometry_msgs/Point has no header/frame_id — inject map frame.
+                // Rolling ID mod 10000 produces a short trail in RViz.
+                // Lifetime 0.5 s auto-expires stale markers between ticks.
+                visualization_msgs::msg::Marker m;
+                m.header.stamp    = now();
+                m.header.frame_id = "map";
+                m.ns              = "ann_pose";
+                m.id              = (ann_marker_seq_++) % 10000;
+                m.type            = visualization_msgs::msg::Marker::SPHERE;
+                m.action          = visualization_msgs::msg::Marker::ADD;
+                m.pose.position.x = msg->x;
+                m.pose.position.y = msg->y;
+                m.pose.position.z = 0.0;
+                m.pose.orientation.w = 1.0;
+                m.scale.x = m.scale.y = m.scale.z = 0.18;
+                m.color.r = 1.0f; m.color.g = 0.0f;
+                m.color.b = 1.0f; m.color.a = 0.85f;
+                m.lifetime = rclcpp::Duration::from_seconds(0.5);
+                ann_marker_pub_->publish(m);
             });
 
         // ── Publishers ───────────────────────────────────────────────────────
@@ -353,6 +378,64 @@ public:
 
         status_pub = create_publisher<std_msgs::msg::String>(
             "/bt/status", 10);
+
+        // ANN trajectory → RViz Marker (magenta sphere in map frame).
+        // Consumed by the /ann/viz_marker display in rviz/system.rviz.
+        ann_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+            "/ann/viz_marker", 10);
+
+        // ── Wheel joint states → robot_state_publisher TF edges ──────────────
+        // WHY: libgazebo_ros_joint_state_publisher.so is NOT shipped with
+        //      ros-humble-gazebo-plugins on this installation; the xacro plugin
+        //      block loads nothing. Without /joint_states, robot_state_publisher
+        //      cannot emit wheel_left_link / wheel_right_link TF edges (only
+        //      continuous joints require live joint data — fixed joints are
+        //      unconditional). bt_brain already owns the /odom subscription and
+        //      all relevant sensor data, so it is the natural place to publish
+        //      /joint_states at 30 Hz with no additional node or package needed.
+        //
+        // Wheel angle from odometry:
+        //   θ_wheel = odom_arc / r_wheel
+        //   arc per tick ≈ odom_vx × dt  (dt = 1/30 s)
+        //   r_wheel = 0.033 m  (TurtleBot3 Burger)
+        //
+        // This gives realistic visual wheel spin in RViz without any hardware
+        // encoder topic — purely cosmetic, has no effect on localization.
+        joint_state_pub_ = create_publisher<sensor_msgs::msg::JointState>(
+            "/joint_states", rclcpp::QoS(10));
+
+        joint_state_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(33),   // 30 Hz
+            [this]() {
+                sensor_msgs::msg::JointState js;
+                js.header.stamp = now();
+
+                // Joint names must match URDF exactly.
+                // URDF uses ${namespace}wheel_left_joint; default namespace=""
+                // so names are simply "wheel_left_joint" / "wheel_right_joint".
+                js.name = {"wheel_left_joint", "wheel_right_joint"};
+
+                // Integrate wheel angle from linear velocity and wheel radius.
+                // θ += (v_x / r) × dt  — both wheels same speed for straight travel.
+                // Left wheel positive, right wheel negative for forward motion
+                // (mirrored mount — same direction of rotation gives opposite sign
+                //  when viewed from outside).
+                double v_x, dt_s;
+                {
+                    std::lock_guard<std::mutex> lk(state->mtx);
+                    v_x = state->odom_vx;
+                }
+                dt_s          = 33.0e-3;                  // 30 Hz timer period
+                double dtheta = (v_x / WHEEL_RADIUS_M) * dt_s;
+                wheel_left_angle_  += dtheta;
+                wheel_right_angle_ -= dtheta;             // opposite mount orientation
+
+                js.position = {wheel_left_angle_, wheel_right_angle_};
+                js.velocity = {v_x / WHEEL_RADIUS_M, -v_x / WHEEL_RADIUS_M};
+                js.effort   = {};
+
+                joint_state_pub_->publish(js);
+            });
 
         RCLCPP_INFO(get_logger(),
             "=== BT Brain (StateHub) online. Waiting for sensors... ===");
@@ -506,6 +589,20 @@ private:
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr      sub_kf1_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr      sub_kf2_;
     rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr    sub_ann_;
+
+    // ANN Marker publisher — converts headerless geometry_msgs/Point to a
+    // map-frame visualization_msgs/Marker for the RViz /ann/viz_marker display.
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr ann_marker_pub_;
+    int ann_marker_seq_{0};   // rolling ID; mod 10000 → short RViz trail
+
+    // Wheel joint state publisher — feeds robot_state_publisher so it can emit
+    // wheel_left_link / wheel_right_link TF edges (fixes RViz "No transform" error).
+    // Uses sensor_msgs::JointState which is already a bt_brain dependency.
+    static constexpr double WHEEL_RADIUS_M = 0.033;   // TurtleBot3 Burger
+    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
+    rclcpp::TimerBase::SharedPtr joint_state_timer_;
+    double wheel_left_angle_  = 0.0;   // [rad] accumulated wheel angle (visual only)
+    double wheel_right_angle_ = 0.0;
 
     // ── TF2 members ───────────────────────────────────────────────────────
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
@@ -1159,74 +1256,74 @@ static void register_all_nodes(BehaviorTreeFactory& factory,
 {
     // ── Conditions ────────────────────────────────────────────────────────────
     factory.registerBuilder<CheckSensorsReady>("CheckSensorsReady",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<CheckSensorsReady>(n, hub);
         });
 
     factory.registerBuilder<CheckGpsSignal>("CheckGpsSignal",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<CheckGpsSignal>(n, hub);
         });
 
     // ── Branch A Actions ──────────────────────────────────────────────────────
     factory.registerBuilder<AlignSensorFrames>("AlignSensorFrames",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<AlignSensorFrames>(n, hub);
         });
 
     factory.registerBuilder<EnsureKF1Active>("EnsureKF1Active",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<EnsureKF1Active>(n, hub);
         });
 
     factory.registerBuilder<EnsureKF2Active>("EnsureKF2Active",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<EnsureKF2Active>(n, hub);
         });
 
     factory.registerBuilder<RunComplementaryFilter_GPS>("RunComplementaryFilter_GPS",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<RunComplementaryFilter_GPS>(n, hub);
         });
 
     factory.registerBuilder<PublishFusedPosition_GPS>("PublishFusedPosition_GPS",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<PublishFusedPosition_GPS>(n, hub);
         });
 
     factory.registerBuilder<CollectAndTrainNN>("CollectAndTrainNN",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<CollectAndTrainNN>(n, hub);
         });
 
     // ── Branch B Actions ──────────────────────────────────────────────────────
     factory.registerBuilder<HaltKF1_FreezeKF2GPS>("HaltKF1_FreezeKF2GPS",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<HaltKF1_FreezeKF2GPS>(n, hub);
         });
 
     factory.registerBuilder<CalculateSlipError>("CalculateSlipError",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<CalculateSlipError>(n, hub);
         });
 
     factory.registerBuilder<FuzzifySlipError>("FuzzifySlipError",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<FuzzifySlipError>(n, hub);
         });
 
     factory.registerBuilder<ActivateFuzzyRules>("ActivateFuzzyRules",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<ActivateFuzzyRules>(n, hub);
         });
 
     factory.registerBuilder<DefuzzifyWeights>("DefuzzifyWeights",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<DefuzzifyWeights>(n, hub);
         });
 
     factory.registerBuilder<FuseNN_KF2_Adaptive>("FuseNN_KF2_Adaptive",
-        [hub](const std::string& n, const NodeConfiguration&) {
+        [hub](const std::string& n, const NodeConfig&) {
             return std::make_unique<FuseNN_KF2_Adaptive>(n, hub);
         });
 }
@@ -1318,8 +1415,8 @@ int main(int argc, char** argv)
 
     auto tree = factory.createTreeFromFile(xml_path);
 
-    // ── 5. Attach Groot2 live visualiser (ZMQ port 1666/1667) ────────────────
-    PublisherZMQ zmq_publisher(tree, 25, 1666, 1667);
+    // ── 5. Attach Groot2 live visualiser (port 1667) ─────────────────────────
+    BT::Groot2Publisher groot2_publisher(tree, 1667);
 
     RCLCPP_INFO(hub->get_logger(),
         "╔══════════════════════════════════════════════════╗");
@@ -1328,7 +1425,7 @@ int main(int argc, char** argv)
     RCLCPP_INFO(hub->get_logger(),
         "║  Tick rate : 10 Hz                               ║");
     RCLCPP_INFO(hub->get_logger(),
-        "║  Groot2    : Connect on port 1666                ║");
+        "║  Groot2    : Connect on port 1667                ║");
     RCLCPP_INFO(hub->get_logger(),
         "║  Output    : /odometry/bt_fused                  ║");
     RCLCPP_INFO(hub->get_logger(),
@@ -1339,7 +1436,7 @@ int main(int argc, char** argv)
 
     while (rclcpp::ok()) {
         RCLCPP_DEBUG(hub->get_logger(), "--- BT Tick ---");
-        NodeStatus status = tree.tickRoot();
+        NodeStatus status = tree.tickOnce();
 
         (void)status;   // tree runs continuously; status is informational only
 

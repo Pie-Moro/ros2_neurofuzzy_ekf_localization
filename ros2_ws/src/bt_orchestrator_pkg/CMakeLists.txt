@@ -8,7 +8,7 @@ endif()
 # ── Required packages ─────────────────────────────────────────────────────────
 find_package(ament_cmake        REQUIRED)
 find_package(rclcpp             REQUIRED)
-find_package(behaviortree_cpp_v3 REQUIRED)
+find_package(behaviortree_cpp REQUIRED)
 find_package(tf2           REQUIRED)
 find_package(tf2_ros       REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -18,6 +18,7 @@ find_package(sensor_msgs        REQUIRED)
 find_package(nav_msgs           REQUIRED)
 find_package(geometry_msgs      REQUIRED)
 find_package(std_msgs           REQUIRED)
+find_package(visualization_msgs REQUIRED)  # ← NEW: ANN trajectory Marker publisher in bt_brain
 
 # For resolving the installed XML path at runtime
 find_package(ament_index_cpp    REQUIRED)
@@ -30,11 +31,12 @@ add_executable(bt_brain src/main.cpp)
 
 ament_target_dependencies(bt_brain
   rclcpp
-  behaviortree_cpp_v3
+  behaviortree_cpp
   sensor_msgs
   nav_msgs
   geometry_msgs
   std_msgs
+  visualization_msgs        # ← NEW: required for visualization_msgs::msg::Marker
   ament_index_cpp
   tf2
   tf2_ros
@@ -72,7 +74,10 @@ install(DIRECTORY launch/
   DESTINATION share/${PROJECT_NAME}/launch
 )
 
-# Install RViz config (if present)
+# Install RViz config (system.rviz).
+# OPTIONAL: colcon will not fail if the rviz/ directory does not yet exist.
+# system.launch.py checks os.path.exists() at launch time — if file is
+# installed, RViz loads the config; otherwise it opens with RViz defaults.
 install(DIRECTORY rviz/
   OPTIONAL
   DESTINATION share/${PROJECT_NAME}/rviz
