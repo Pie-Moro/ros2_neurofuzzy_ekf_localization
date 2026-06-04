@@ -205,6 +205,33 @@ ekf_filter_node_gps_imu: # Global state estimation, it has discrete updates when
                            # simultaneously during GPS lock acquisition, preventing
                            # the multi-spike innovation that precedes covariance blowup.
 
+    # S21 FIX: Add /odom velocities to KF1 for improved indoor dead-reckoning.
+    #
+    # PROBLEM: KF1 previously dead-reckoned on IMU acceleration alone during
+    # GPS-denied indoor segments.  IMU integration over 10+ minutes accumulates
+    # velocity drift → large position error at GPS re-acquisition → large Kalman
+    # innovation → bt_fused jumps several metres when GPS resumes → visible
+    # offset in PlotJuggler between /odometry/global and /odom.
+    # Confirmed: Test 3 post-indoor pass GPS jump = ~8 m (log: #333 JUMP_REJECT).
+    #
+    # FIX: fuse wheel-odometry translational velocity (vx, vy) from /odom.
+    # In Gazebo simulation /odom is perfect (zero encoder noise, zero drift).
+    # Adding vx/vy anchors the EKF velocity state to encoder truth during
+    # GPS-denied segments.  Smaller velocity drift → smaller position drift
+    # → smaller GPS re-acquisition innovation → smoother bt_fused output and
+    # better alignment with /odom in PlotJuggler.
+    #
+    # SAFETY: Only vx/vy fused — no positions (x,y=false, avoids odom-frame /
+    # map-frame origin conflict) and no yaw_rate (already provided by imu0,
+    # double-counting would over-constrain heading).
+    odom1: /odom
+    odom1_config: [false, false, false,
+                   false, false, false,
+                   true,  true,  false,
+                   false, false, false,
+                   false, false, false]
+    odom1_queue_size: 5
+
     initial_state: [5.0, 6.5, 0.0,
                     0.0, 0.0, 0.0,
                     0.0, 0.0, 0.0,
